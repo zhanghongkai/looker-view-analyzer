@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+import csv
+from collections import defaultdict
+from looker_utils.analyzers import guess_table_info
+import re
+import os
+from looker_utils.utils import DEFAULT_PROJECT, DEFAULT_DATASET, SNAPSHOT_PROJECT, SNAPSHOT_DATASET
+
+# Generate result report
+def generate_report(view_list, actual_usage, unnest_views, actual_table_names, output_file):
+    # Sort by actual usage frequency
+    sorted_views = sorted(actual_usage.items(), key=lambda x: x[1], reverse=True)
+    
+    # Create a statistics counter to record the number of different citation_types
+    citation_type_counts = defaultdict(int)
+    
+    # Write to CSV file
+    with open(output_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['view_name', 'usage_freq', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables'])
+        
+        for view_name, usage in sorted_views:
+            table_name = ""
+            citation_type = "native"  # Default type
+            additional_tables = []
+            
+            # Prioritize getting citation type from view_list
+            if view_name in view_list:
+                citation_type = view_list[view_name]['citation_type']
+                # Record the number of views of this type
+                citation_type_counts[citation_type] += 1
+                
+                # Get table name from view_list
+                if view_list[view_name]['table_names']:
+                    table_names = view_list[view_name]['table_names']
+                    if table_names:
+                        table_name = table_names[0]  # Main table name
+                        if len(table_names) > 1:
+                            additional_tables = table_names[1:]  # Additional table names
+            
+            # Only try to get from actual_table_names if there's no table name in view_list
+            elif view_name in actual_table_names and actual_table_names[view_name]:
+                table_names = actual_table_names[view_name]
+                if table_names:
+                    table_name = table_names[0]  # Main table name
+                    if len(table_names) > 1:
+                        additional_tables = table_names[1:]  # Additional table names
+            
+            # If it's an unnest view, ensure citation_type is correct
+            if view_name in unnest_views:
+                citation_type = 'unnest'
+                # Reset table name
+                if table_name and (DEFAULT_PROJECT in table_name or SNAPSHOT_PROJECT in table_name):
+                    table_name = ''
+                    additional_tables = []
+            
+            # Ensure table name is in complete three-part format (if not derived_explore type)
+            if citation_type != 'derived_explore' and table_name and (table_name.startswith(DEFAULT_PROJECT) or table_name.startswith(SNAPSHOT_PROJECT)):
+                parts = table_name.split('.')
+                if len(parts) == 1:  # Only project part
+                    table_name = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{view_name}"
+                elif len(parts) == 2:  # Missing table part
+                    table_name = f"{parts[0]}.{parts[1]}.{view_name}"
+            
+            # For derived_explore type views, clear the table name
+            if citation_type == 'derived_explore':
+                table_name = ''
+                additional_tables = []
+            
+            # ----------------------------------------------------------
+            # Clean up `additional_tables`:
+            #   • Only keep valid table names in project.dataset.table format
+            #   • Auto-complete paths missing project, default to DEFAULT_PROJECT
+            #   • Remove duplicates and maintain stable order
+            # ----------------------------------------------------------
+            formatted_additional_tables = []
+            seen_tables = set()
+            for raw_entry in additional_tables:
+                # Split using semicolons, commas, spaces, parentheses as delimiters
+                tokens = re.split(r'[;\s,()]+', raw_entry)
+                for token in tokens:
+                    if not token:
+                        continue
+                    token = token.strip('`')  # Remove backticks
+                    # If starts with .dataset.table, add project prefix
+                    if token.startswith('.'):
+                        token = f"{DEFAULT_PROJECT}{token}"
+                    # Check if it matches x.y.z structure
+                    if re.match(r'^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$', token):
+                        if token not in seen_tables:
+                            formatted_additional_tables.append(token)
+                            seen_tables.add(token)
+            
+            # Special handling for any view that still has no table name
+            if not table_name and view_name in view_list and 'table_names' in view_list[view_name]:
+                print(f"DEBUG - Using table names from view_list for {view_name}: {view_list[view_name]['table_names']}")
+                if view_list[view_name]['table_names']:
+                    table_name = view_list[view_name]['table_names'][0]
+                    additional_tables = view_list[view_name]['table_names'][1:] if len(view_list[view_name]['table_names']) > 1 else []
+            
+            # Log citation type for debugging
+            print(f"DEBUG - Citation type for {view_name}: {citation_type}")
+            
+            writer.writerow([
+                view_name, 
+                0,  # Original usage frequency is 0, because we no longer use table_list.csv
+                usage, 
+                table_name, 
+                citation_type, 
+                ';'.join(formatted_additional_tables) if formatted_additional_tables else ''
+            ])
+    
+    # Print the top 20 most used views
+    print("Top 20 most used views (sorted by calculated usage frequency):")
+    print("View Name,Original Usage Frequency,Calculated Usage Frequency")
+    for view_name, usage in sorted_views[:20]:
+        print(f"{view_name},0,{usage}")
+    
+    # Print statistics for different view types
+    print("\nView citation type statistics:")
+    for citation_type, count in citation_type_counts.items():
+        print(f"{citation_type}: {count} views")
+            
+    # Return the sorted view list for generating export commands
+    return sorted_views
+
+# Generate export commands to GCP bucket
+def generate_export_commands(sorted_views, view_list, unnest_views, actual_table_names, export_all_file, export_active_file, gcs_bucket=None):
+    # Use sets to record processed table names, avoiding duplicate exports
+    processed_tables = set()
+    processed_active_tables = set()  # New: record processed active tables
+    skipped_views = set()
+    error_tables = set()
+    
+    # If no GCS bucket is provided, skip command generation
+    if not gcs_bucket:
+        print("No GCS bucket specified, skipping export command generation")
+        return
+    
+    # Debug info: check sample views for table names
+    sample_views = list(view_list.keys())[:5] if view_list else []
+    for view_name in sample_views:
+        print(f"DEBUG - Sample view: {view_name}, table names: {view_list[view_name].get('table_names', [])}")
+    
+    # Open two files for writing
+    with open(export_all_file, 'w') as f_all, open(export_active_file, 'w') as f_active:
+        for view_name, usage in sorted_views:
+            # Skip unnest views
+            if view_name in unnest_views:
+                skipped_views.add(view_name)
+                continue
+                
+            try:
+                table_names = []
+                
+                # Get table names (prioritize actual table names from view definitions)
+                if view_name in actual_table_names:
+                    table_names = actual_table_names[view_name]
+                elif view_name in view_list:
+                    table_names = view_list[view_name]['table_names']
+                    # If the view is in the original table list but has no table names, skip it
+                    if not table_names:
+                        skipped_views.add(view_name)
+                        continue
+                
+                # If there are still no table names, try to guess
+                if not table_names:
+                    table_names_list, citation_type = guess_table_info(view_name, view_list, unnest_views, actual_table_names)
+                    # If table names cannot be determined or it's an unnest view, skip it
+                    if not table_names_list or citation_type == 'unnest':
+                        skipped_views.add(view_name)
+                        continue
+                    table_names = table_names_list
+                
+                # Special handling for views without table reference
+                if not table_names:
+                    print(f"DEBUG - No table names found for {view_name}, attempting to derive from naming convention")
+                    # Try to derive table name from view name using naming conventions
+                    derived_table_name = f'{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{view_name}'
+                    table_names = [derived_table_name]
+                
+                # Process each table name
+                for table_name in table_names:
+                    # Clean up all special characters and newlines in the table name
+                    table_name = table_name.strip().replace('\n', '').replace('#', '').replace('\r', '')
+                    
+                    # Ensure table name is in complete three-part format
+                    if table_name.startswith(DEFAULT_PROJECT) or table_name.startswith(SNAPSHOT_PROJECT):
+                        parts = table_name.split('.')
+                        if len(parts) == 1:  # Only project part
+                            table_name = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{view_name}"
+                        elif len(parts) == 2:  # Missing table part
+                            table_name = f"{parts[0]}.{parts[1]}.{view_name}"
+                    
+                    # Check if it's an actual table (contains DEFAULT_PROJECT or SNAPSHOT_PROJECT) and hasn't been processed
+                    if (DEFAULT_PROJECT in table_name or SNAPSHOT_PROJECT in table_name) and table_name not in processed_tables:
+                        # Add table name to processed set
+                        processed_tables.add(table_name)
+                        
+                        # Build export command
+                        # Extract short table name from full table name (for URI construction)
+                        table_parts = table_name.split('.')
+                        if len(table_parts) >= 3:
+                            project = table_parts[0]  # DEFAULT_PROJECT or SNAPSHOT_PROJECT
+                            dataset = table_parts[1]  # DEFAULT_DATASET or snapshot dataset
+                            short_table_name = table_parts[2].replace('*', '')  # Remove possible wildcards
+                            
+                            # Ensure table name has no newlines or special characters
+                            short_table_name = short_table_name.strip().replace('\n', '').replace('#', '').replace('\r', '')
+                            
+                            # Build complete URI path for snapshot and regular tables
+                            bucket_path = f"{project}/{dataset}/{short_table_name}"
+                            
+                            # Ensure path has no special characters
+                            bucket_path = bucket_path.strip().replace('\n', '').replace('#', '').replace('\r', '')
+                            
+                            # Wrap each export command with BEGIN...EXCEPTION...END
+                            export_command = f"""BEGIN
+EXPORT DATA
+  OPTIONS (
+    uri = 'gs://{gcs_bucket}/{bucket_path}/*.parquet',
+    format = 'PARQUET',
+    compression = "SNAPPY",
+    overwrite = true)
+AS (
+  SELECT *
+  FROM `{table_name}`
+);
+EXCEPTION WHEN ERROR THEN
+  SELECT FORMAT('Export table %s failed: %%s', @@error.message) as error_message;
+END;
+
+"""
+                            # Write to all tables file
+                            f_all.write(export_command)
+                            
+                            # If usage frequency is greater than 0, also write to active tables file
+                            if usage > 0 and table_name not in processed_active_tables:
+                                f_active.write(export_command)
+                                processed_active_tables.add(table_name)
+            except Exception as e:
+                # Record views that had exceptions during processing
+                error_tables.add(view_name)
+                print(f"Error processing view {view_name}: {str(e)}")
+    
+    print(f"Export commands for all tables saved to {export_all_file}")
+    print(f"Export commands for active tables saved to {export_active_file}")
+    print(f"Generated export commands for {len(processed_tables)} unique tables")
+    print(f"Of these, {len(processed_active_tables)} are active tables (usage frequency > 0)")
+    print(f"Skipped {len(skipped_views)} non-actual table views")
+    if error_tables:
+        print(f"Views with errors during processing: {len(error_tables)}")
+
+# Function to generate a report on Looker view usage
+def generate_view_usage_report(view_list, model_uses, explore_uses, active_explore_list, output_path=None, output_filename="updated_table_list.csv"):
+    """
+    Generates a CSV report of Looker view usage.
+    
+    Parameters:
+    view_list (dict): Dictionary containing view information.
+    model_uses (dict): Dictionary tracking view usage in models.
+    explore_uses (dict): Dictionary tracking view usage in explores.
+    active_explore_list (set): Set of active/valid explores.
+    output_path (str): Directory to write output file.
+    output_filename (str): Name of output file.
+    
+    Returns:
+    str: Path to the generated report file.
+    """
+    # Set default output path if not provided
+    if output_path is None:
+        output_path = os.getcwd()
+    
+    # Ensure output path exists
+    os.makedirs(output_path, exist_ok=True)
+    
+    # Prepare the full output path
+    output_file = os.path.join(output_path, output_filename)
+    print(f"Generating view usage report: {output_file}")
+    
+    # Open the CSV file for writing
+    with open(output_file, 'w', newline='') as csvfile:
+        # Define CSV writer with headers
+        csv_writer = csv.writer(csvfile)
+        csv_writer.writerow([
+            'view_name', 'used_in_models', 'used_in_explores', 'used_in_valid_explores', 
+            'total_explore_usages', 'valid_explore_usages', 'table_name', 'table_names', 
+            'table_type', 'models', 'explores'
+        ])
+        
+        # Write data for each view
+        for view_name, info in sorted(view_list.items()):
+            # Count usage metrics
+            model_count = len(model_uses.get(view_name, []))
+            explore_count = len(explore_uses.get(view_name, []))
+            
+            # Count valid explore usages
+            valid_explores = []
+            for explore in explore_uses.get(view_name, []):
+                if explore in active_explore_list:
+                    valid_explores.append(explore)
+            valid_explore_count = len(valid_explores)
+            
+            # List table names
+            table_name = info.get('table_name', '')  # Primary table name
+            table_names = info.get('table_names', [])  # All associated table names
+            citation_type = info.get('citation_type', 'unknown')  # Type of table citation
+            
+            # Clean up table names
+            if not table_name and table_names:
+                table_name = table_names[0]
+            
+            # Lists of models and explores for this view
+            models_list = ','.join(sorted(model_uses.get(view_name, [])))
+            explores_list = ','.join(sorted(explore_uses.get(view_name, [])))
+            
+            # Write row to CSV
+            csv_writer.writerow([
+                view_name,                  # Name of the view
+                model_count,                # Number of models using this view
+                explore_count,              # Number of explores using this view
+                valid_explore_count,        # Number of valid explores using this view
+                explore_uses.get(view_name, {}),  # Total number of explore usages
+                valid_explore_count,        # Number of valid explore usages
+                table_name,                 # Primary table name
+                ','.join(table_names),      # All table names, comma-separated
+                citation_type,              # Type of table citation
+                models_list,                # List of models using this view
+                explores_list               # List of explores using this view
+            ])
+    
+    print(f"View usage report generated: {output_file}")
+    return output_file
+
+# Function to filter views based on usage in active explores
+def filter_views_by_usage(view_list, explore_uses, active_explore_list):
+    """
+    Filters views based on their usage in active explores.
+    
+    Parameters:
+    view_list (dict): Dictionary containing view information.
+    explore_uses (dict): Dictionary tracking view usage in explores.
+    active_explore_list (set): Set of active/valid explores.
+    
+    Returns:
+    dict: Filtered view list containing only views used in active explores.
+    """
+    filtered_views = {}
+    
+    for view_name, info in view_list.items():
+        # Check if view is used in any active explore
+        is_used = False
+        for explore in explore_uses.get(view_name, []):
+            if explore in active_explore_list:
+                is_used = True
+                break
+        
+        # Include view if it's used in active explores
+        if is_used:
+            filtered_views[view_name] = info
+    
+    return filtered_views
+
