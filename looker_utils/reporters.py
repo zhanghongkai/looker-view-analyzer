@@ -7,7 +7,7 @@ import os
 from looker_utils.utils import DEFAULT_PROJECT, DEFAULT_DATASET, SNAPSHOT_PROJECT, SNAPSHOT_DATASET
 
 # Generate result report
-def generate_report(view_list, actual_usage, unnest_views, actual_table_names, output_file):
+def generate_report(view_list, actual_usage, unnest_views, actual_table_names, output_file, explore_to_views=None):
     # Check if calculated usage values are available (whether the user provided an activities_file)
     has_usage_data = all(usage is not None for usage in actual_usage.values())
     
@@ -20,10 +20,18 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     # Create a statistics counter to record the number of different citation_types
     citation_type_counts = defaultdict(int)
     
+    # Calculate explore count for each view
+    view_to_explore_count = defaultdict(int)
+    if explore_to_views:
+        # 反转explore_to_views字典，计算每个view被多少个explore使用
+        for explore_name, views in explore_to_views.items():
+            for view in views:
+                view_to_explore_count[view] += 1
+    
     # Write to CSV file
     with open(output_file, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['view_name', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables'])
+        writer.writerow(['view_name', 'explore_count', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables'])
         
         for view_name, usage in sorted_views:
             table_name = ""
@@ -110,8 +118,12 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             # Handle the case where calculated_usage is None, output "NULL"
             calc_usage_value = "NULL" if usage is None else usage
             
+            # Get explore count for this view
+            explore_count = view_to_explore_count.get(view_name, 0)
+            
             writer.writerow([
                 view_name, 
+                explore_count,
                 calc_usage_value, 
                 table_name, 
                 citation_type, 
@@ -121,9 +133,10 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     # Only output the top 20 most frequently used views when usage data is available
     if has_usage_data:
         print("Top 20 most used views (sorted by calculated usage frequency):")
-        print("View Name,Calculated Usage Frequency")
+        print("View Name,Explore Count,Calculated Usage Frequency")
         for view_name, usage in sorted_views[:20]:
-            print(f"{view_name},{usage}")
+            explore_count = view_to_explore_count.get(view_name, 0)
+            print(f"{view_name},{explore_count},{usage}")
     else:
         print("No usage data available (no activities file provided), skipping top views display")
     

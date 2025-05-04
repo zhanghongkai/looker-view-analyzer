@@ -60,9 +60,21 @@ def extract_tables_from_view_content(view_name, content):
         derived_block = None  # Ensure variable exists
     
     # Try to find sql_table_name definition (excluding comment lines)
-    sql_table_match = re.search(r'sql_table_name:\s+`([^`]+)`', uncommented_content)
+    # 原始正则表达式只匹配整个表名在反引号内的情况
+    # sql_table_match = re.search(r'sql_table_name:\s+`([^`]+)`', uncommented_content)
+    
+    # 新的正则表达式能够处理项目名、数据集和表名可能分别用反引号包围的情况
+    sql_table_match = re.search(r'sql_table_name:\s+(?:`?([^`\s.]+)`?\.`?([^`\s.]+)`?\.`?([^`\s.;]+)`?|`([^`]+)`)', uncommented_content)
+    
     if sql_table_match:
-        table_name = sql_table_match.group(1)
+        if sql_table_match.group(4):  # 原格式: `project.dataset.table`
+            table_name = sql_table_match.group(4)
+        else:  # 新格式: `project`.`dataset`.`table` 或变体
+            project = sql_table_match.group(1)
+            dataset = sql_table_match.group(2)
+            table = sql_table_match.group(3)
+            table_name = f"{project}.{dataset}.{table}"
+        
         tables.append(table_name)
         return tables, 'native'
     

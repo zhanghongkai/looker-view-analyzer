@@ -136,7 +136,7 @@ def main():
         actual_usage = {view_name: None for view_name in view_list}  # Set actual_usage to None for all views
     
     print("Generating report...")
-    sorted_views = generate_report(view_list, actual_usage, unnest_views, actual_table_names, OUTPUT_TABLE_LIST)
+    sorted_views = generate_report(view_list, actual_usage, unnest_views, actual_table_names, OUTPUT_TABLE_LIST, explore_to_views)
     print(f"Done! Results saved to {OUTPUT_TABLE_LIST}")
     
     # Only generate export commands if --export_gs_bucket parameter is provided
