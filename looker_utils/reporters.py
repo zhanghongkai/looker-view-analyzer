@@ -23,7 +23,7 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     # Write to CSV file
     with open(output_file, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['view_name', 'usage_freq', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables'])
+        writer.writerow(['view_name', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables'])
         
         for view_name, usage in sorted_views:
             table_name = ""
@@ -112,7 +112,6 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             
             writer.writerow([
                 view_name, 
-                0,  # Original usage frequency is 0, because we no longer use table_list.csv
                 calc_usage_value, 
                 table_name, 
                 citation_type, 
@@ -122,9 +121,9 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     # Only output the top 20 most frequently used views when usage data is available
     if has_usage_data:
         print("Top 20 most used views (sorted by calculated usage frequency):")
-        print("View Name,Original Usage Frequency,Calculated Usage Frequency")
+        print("View Name,Calculated Usage Frequency")
         for view_name, usage in sorted_views[:20]:
-            print(f"{view_name},0,{usage}")
+            print(f"{view_name},{usage}")
     else:
         print("No usage data available (no activities file provided), skipping top views display")
     
