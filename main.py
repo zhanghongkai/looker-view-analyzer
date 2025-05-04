@@ -17,28 +17,29 @@ from looker_utils.analyzers import (
 )
 from looker_utils.reporters import generate_report, generate_export_commands
 from looker_utils.utils import set_global_project_settings
+from looker_utils.constants import DEFAULT_PROJECT, SNAPSHOT_PROJECT
+import looker_utils.constants as constants
 
 def main():
     """Main function that coordinates different modules to complete the view usage analysis"""
-    # Set up argument parser
-    parser = argparse.ArgumentParser(description='Analyze Looker view usage and generate export commands')
-    parser.add_argument('--looker_path', type=str, help='Path to Looker project directory')
-    parser.add_argument('--activities_file', type=str, default='activities.csv', 
-                        help='Path to activities CSV file (default: activities.csv)')
-    parser.add_argument('--output_dir', type=str, default='.',
-                        help='Directory to save output files (default: current directory)')
-    parser.add_argument('--export_gs_bucket', type=str,
-                        help='GCS bucket name for export commands (if not provided, no export commands will be generated)')
-    parser.add_argument('--default_project', type=str, default='your-company',
-                        help='Default BigQuery project name (default: your-company)')
-    parser.add_argument('--default_dataset', type=str, default='analytics_prod',
-                        help='Default BigQuery dataset name (default: analytics_prod)')
-    parser.add_argument('--snapshot_project', type=str, default='your-company-snapshot',
-                        help='BigQuery project name for snapshot tables (default: your-company-snapshot)')
-    parser.add_argument('--snapshot_dataset', type=str, default='analytics_prod_snapshots',
-                        help='BigQuery dataset name for snapshot tables (default: analytics_prod_snapshots)')
-    
+    # Set up command line arguments
+    parser = argparse.ArgumentParser(description='Analyze Looker views to determine table usage')
+    parser.add_argument('--looker_path', required=True, help='Path to the Looker project')
+    parser.add_argument('--model', help='Specific model to analyze (default: all models)')
+    parser.add_argument('--max_models', type=int, default=None, help='Maximum number of models to process')
+    parser.add_argument('--table_file', help='CSV file with table data to compare (optional)')
+    parser.add_argument('--export_gs_bucket', help='GCS bucket name for export commands (e.g., bucket-name)')
+    parser.add_argument('--default_project', default='curated-dwh', help='Default BigQuery project name (default: curated-dwh)')
+    parser.add_argument('--default_dataset', default='analytics_prod', help='Default BigQuery dataset name (default: analytics_prod)')
+    parser.add_argument('--snapshot_project', default='curated-dwh-snapshot', help='Snapshot BigQuery project name (default: curated-dwh-snapshot)')
+    parser.add_argument('--snapshot_dataset', default='analytics_prod_snapshots', help='Snapshot BigQuery dataset name (default: analytics_prod_snapshots)')
+    parser.add_argument('--output_dir', default='.', help='Directory to save output files (default: current directory)')
+    parser.add_argument('--activities_file', default='activities.csv', help='Path to activities CSV file (default: activities.csv)')
     args = parser.parse_args()
+    
+    # Update constants with command line values
+    constants.DEFAULT_PROJECT = args.default_project
+    constants.SNAPSHOT_PROJECT = args.snapshot_project
     
     # Set global project settings
     set_global_project_settings(
@@ -138,7 +139,9 @@ def main():
             actual_table_names, 
             EXPORT_COMMANDS_FILE, 
             EXPORT_COMMANDS_ACTIVE_FILE, 
-            args.export_gs_bucket
+            args.export_gs_bucket,
+            default_project=args.default_project,
+            snapshot_project=args.snapshot_project
         )
         print(f"Export commands saved to {EXPORT_COMMANDS_FILE} and {EXPORT_COMMANDS_ACTIVE_FILE}")
     else:

@@ -125,12 +125,36 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     return sorted_views
 
 # Generate export commands to GCP bucket
-def generate_export_commands(sorted_views, view_list, unnest_views, actual_table_names, export_all_file, export_active_file, gcs_bucket=None):
+def generate_export_commands(sorted_views, view_list, unnest_views, actual_table_names, export_all_file, export_active_file, gcs_bucket=None, default_project=None, snapshot_project=None):
+    """
+    Generates BigQuery export commands for tables identified in the view analysis.
+    
+    Parameters:
+    sorted_views (list): List of views sorted by usage.
+    view_list (dict): Dictionary containing view definitions and metadata.
+    unnest_views (set): Set of views that are unnested from other tables.
+    actual_table_names (dict): Dictionary mapping view names to actual table names.
+    export_all_file (str): Path to write export commands for all tables.
+    export_active_file (str): Path to write export commands for active tables.
+    gcs_bucket (str): Google Cloud Storage bucket name for export destination.
+    default_project (str): Default BigQuery project name (like 'curated-dwh').
+    snapshot_project (str): Snapshot BigQuery project name (like 'curated-dwh-snapshot').
+    
+    Returns:
+    None
+    """
+    
+    # Use provided project names or fall back to global constants
+    actual_default_project = default_project or DEFAULT_PROJECT
+    actual_snapshot_project = snapshot_project or SNAPSHOT_PROJECT
+    
+    print(f"DEBUG - Using project names: default_project={actual_default_project}, snapshot_project={actual_snapshot_project}")
+    
     # Use sets to record processed table names, avoiding duplicate exports
-    processed_tables = set()
-    processed_active_tables = set()  # New: record processed active tables
-    skipped_views = set()
-    error_tables = set()
+    processed_tables = set()  # All tables that have been processed
+    processed_active_tables = set()  # Tables that are active (have usage > 0)
+    skipped_views = set()  # Views that were skipped
+    error_tables = set()  # Views that had errors during processing
     
     # If no GCS bucket is provided, skip command generation
     if not gcs_bucket:
@@ -176,7 +200,7 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
                 if not table_names:
                     print(f"DEBUG - No table names found for {view_name}, attempting to derive from naming convention")
                     # Try to derive table name from view name using naming conventions
-                    derived_table_name = f'{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{view_name}'
+                    derived_table_name = f'{actual_default_project}.{DEFAULT_DATASET}.{view_name}'
                     table_names = [derived_table_name]
                 
                 # Process each table name
@@ -184,16 +208,23 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
                     # Clean up all special characters and newlines in the table name
                     table_name = table_name.strip().replace('\n', '').replace('#', '').replace('\r', '')
                     
+                    # Handle cases where table_name is just the project name without dataset and table
+                    if table_name == actual_default_project or table_name == actual_snapshot_project:
+                        table_name = f"{actual_default_project}.{DEFAULT_DATASET}.{view_name}"
+                    
                     # Ensure table name is in complete three-part format
-                    if table_name.startswith(DEFAULT_PROJECT) or table_name.startswith(SNAPSHOT_PROJECT):
+                    if table_name.startswith(actual_default_project) or table_name.startswith(actual_snapshot_project):
                         parts = table_name.split('.')
                         if len(parts) == 1:  # Only project part
-                            table_name = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{view_name}"
+                            table_name = f"{actual_default_project}.{DEFAULT_DATASET}.{view_name}"
                         elif len(parts) == 2:  # Missing table part
                             table_name = f"{parts[0]}.{parts[1]}.{view_name}"
                     
-                    # Check if it's an actual table (contains DEFAULT_PROJECT or SNAPSHOT_PROJECT) and hasn't been processed
-                    if (DEFAULT_PROJECT in table_name or SNAPSHOT_PROJECT in table_name) and table_name not in processed_tables:
+                    # Check if it's an actual table (contains actual_default_project or actual_snapshot_project) and hasn't been processed
+                    print(f"DEBUG - Checking table: {table_name}, contains actual_default_project: {actual_default_project in table_name}, contains actual_snapshot_project: {actual_snapshot_project in table_name}")
+                    
+                    # Relax the condition - accept all tables with valid three-part names (project.dataset.table)
+                    if ('.' in table_name) and (table_name not in processed_tables):
                         # Add table name to processed set
                         processed_tables.add(table_name)
                         
@@ -201,35 +232,38 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
                         # Extract short table name from full table name (for URI construction)
                         table_parts = table_name.split('.')
                         if len(table_parts) >= 3:
-                            project = table_parts[0]  # DEFAULT_PROJECT or SNAPSHOT_PROJECT
-                            dataset = table_parts[1]  # DEFAULT_DATASET or snapshot dataset
+                            project = table_parts[0]  # Project name from table definition
+                            dataset = table_parts[1]  # Dataset name from table definition
                             short_table_name = table_parts[2].replace('*', '')  # Remove possible wildcards
                             
-                            # Ensure table name has no newlines or special characters
-                            short_table_name = short_table_name.strip().replace('\n', '').replace('#', '').replace('\r', '')
+                            print(f"DEBUG - Original: project={project}, dataset={dataset}, short_table_name={short_table_name}")
+                            print(f"DEBUG - Constants: actual_default_project={actual_default_project}, actual_snapshot_project={actual_snapshot_project}")
                             
-                            # Build complete URI path for snapshot and regular tables
-                            bucket_path = f"{project}/{dataset}/{short_table_name}"
+                            # Generate SQL export command for this table
+                            print(f"DEBUG - Generating export command for {table_name}")
                             
-                            # Ensure path has no special characters
-                            bucket_path = bucket_path.strip().replace('\n', '').replace('#', '').replace('\r', '')
+                            # Use project names directly from actual table names
+                            if 'snapshot' in project.lower():
+                                source_project = actual_snapshot_project
+                            else:
+                                source_project = actual_default_project
+                                
+                            print(f"DEBUG - Using source_project={source_project} for export command")
                             
-                            # Wrap each export command with BEGIN...EXCEPTION...END
                             export_command = f"""BEGIN
 EXPORT DATA
   OPTIONS (
-    uri = 'gs://{gcs_bucket}/{bucket_path}/*.parquet',
+    uri = 'gs://{gcs_bucket}/{source_project}/{dataset}/{short_table_name}/*.parquet',
     format = 'PARQUET',
     compression = "SNAPPY",
     overwrite = true)
 AS (
   SELECT *
-  FROM `{table_name}`
+  FROM `{source_project}.{dataset}.{short_table_name}`
 );
 EXCEPTION WHEN ERROR THEN
-  SELECT FORMAT('Export table %s failed: %%s', @@error.message) as error_message;
+SELECT 1; -- Skip if table does not exist or other issues
 END;
-
 """
                             # Write to all tables file
                             f_all.write(export_command)
