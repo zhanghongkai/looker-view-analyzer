@@ -25,17 +25,29 @@ No additional dependencies are required beyond Python 3.6+.
 
 ## Usage
 
-Run the script using Python 3:
+### Basic Usage
+
+The most basic way to use this tool is to simply provide the path to your Looker project:
 
 ```bash
-python main.py --looker_path /path/to/looker/project --activities_file activities.csv --output_dir ./output --export_gs_bucket your-gcs-bucket-name
+python main.py --looker_path /path/to/looker/project
 ```
 
-Advanced usage with custom project and dataset settings:
+This will analyze your Looker project and generate the `updated_table_list.csv` file containing view-to-table mapping information for all views.
+
+### Advanced Usage
+
+To analyze explore usage and generate export commands, you can use additional parameters:
+
+```bash
+python main.py --looker_path /path/to/looker/project --explore_usage_file explore_usage.csv --export_gs_bucket your-gcs-bucket-name
+```
+
+For custom project and dataset settings:
 
 ```bash
 python main.py --looker_path /path/to/looker/project \
-               --activities_file activities.csv \
+               --explore_usage_file explore_usage.csv \
                --output_dir ./output \
                --export_gs_bucket your-gcs-bucket-name \
                --default_project custom-project \
@@ -44,10 +56,43 @@ python main.py --looker_path /path/to/looker/project \
                --snapshot_dataset custom_snapshot_dataset
 ```
 
+### Optional Features
+
+#### 1. Explore Usage Analysis (--explore_usage_file)
+
+This feature allows you to analyze the usage frequency of views in your Looker project:
+
+- **Description**: By providing a CSV file containing explore usage data, the tool can calculate the usage frequency of each view
+- **Usage**: `python main.py --looker_path /path/to/looker/project --explore_usage_file explore_usage.csv`
+- **Input Requirements**: A CSV file with explore usage data containing explore names and usage counts. The file should have at least these columns:
+  - `Query Explore`: The name of the explore in Looker
+  - `Query Model`: The model to which the explore belongs
+  - `History Query Run Count`: The number of times the explore has been queried
+  
+  You can generate this file from the Looker Admin interface by navigating to the "Explores" section under "Usage" and exporting the data as CSV.
+- **Output Results**:
+  - The `updated_table_list.csv` file will include a `calculated_usage` field showing the usage frequency of each view
+  - If the `--export_gs_bucket` parameter is also provided, an additional `export_command_active.txt` file will be generated, containing export commands only for active views
+- **Use Cases**: This feature is particularly useful when you need to identify which views are actively used and which ones might be obsolete
+
+#### 2. Export Command Generation (--export_gs_bucket)
+
+This feature allows you to generate BigQuery export commands for data migration:
+
+- **Description**: By providing a GCS bucket name, the tool can generate commands to export data from BigQuery to GCS
+- **Usage**: `python main.py --looker_path /path/to/looker/project --export_gs_bucket your-gcs-bucket-name`
+- **Input Requirements**: A valid Google Cloud Storage bucket name
+- **Output Results**:
+  - Generates an `export_command.txt` file containing export commands for all tables
+  - If the `--explore_usage_file` parameter is also provided, an additional `export_command_active.txt` file will be generated, containing export commands only for active tables
+- **Use Cases**: This feature is particularly useful for data migration, backup, or when moving from one BigQuery project to another
+
+These two features can be used independently or in combination for more comprehensive analysis and export capabilities. When used together, you can export only actively used tables, saving storage space and migration time.
+
 ### Command Line Arguments
 
 - `--looker_path`: Path to the Looker project directory (required if the script is not in the Looker project directory)
-- `--activities_file`: Path to the CSV file containing explore activity data (default: 'activities.csv')
+- `--explore_usage_file`: Path to the CSV file containing explore activity data (optional). If not provided, the `calculated_usage` field will be set to NULL in the output and the `export_command_active.txt` file will not be generated.
 - `--output_dir`: Directory where output files will be saved (default: current directory)
 - `--export_gs_bucket`: GCS bucket name for export commands (optional). If not provided, the script will analyze the views but will not generate export commands.
 - `--default_project`: Default BigQuery project name (default: 'your-company')
@@ -57,7 +102,13 @@ python main.py --looker_path /path/to/looker/project \
 
 ### Input Files
 
-- `activities.csv`: CSV file containing explore usage data with columns for explore name and usage count
+- `explore_usage.csv`: CSV file containing explore usage data with columns for explore name and usage count (optional). This file should have the following columns:
+  - `Query Explore`: The name of the explore in Looker
+  - `Query Model`: The model to which the explore belongs
+  - `History Query Run Count`: The number of times the explore has been queried
+  - `User Count`: The number of users who have used this explore
+  
+  You can generate this file from the Looker Admin interface by navigating to the "Explores" section under "Usage" and exporting the data as CSV.
 
 ### Output Files
 
@@ -65,7 +116,7 @@ The script generates up to three output files:
 
 - `updated_table_list.csv`: View-to-table mapping information for all views (always generated)
 - `export_command.txt`: Export commands for all tables (only generated if `--export_gs_bucket` is provided)
-- `export_command_active.txt`: Export commands for active tables only (tables with usage frequency > 0) (only generated if `--export_gs_bucket` is provided)
+- `export_command_active.txt`: Export commands for active tables only (tables with usage frequency > 0) (only generated if both `--export_gs_bucket` and `--explore_usage_file` are provided)
 
 ## Project Structure
 

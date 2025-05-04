@@ -34,7 +34,7 @@ def main():
     parser.add_argument('--snapshot_project', default='curated-dwh-snapshot', help='Snapshot BigQuery project name (default: curated-dwh-snapshot)')
     parser.add_argument('--snapshot_dataset', default='analytics_prod_snapshots', help='Snapshot BigQuery dataset name (default: analytics_prod_snapshots)')
     parser.add_argument('--output_dir', default='.', help='Directory to save output files (default: current directory)')
-    parser.add_argument('--activities_file', default='activities.csv', help='Path to activities CSV file (default: activities.csv)')
+    parser.add_argument('--explore_usage_file', help='Path to explore usage CSV file (optional, if not provided calculated_usage will be NULL)')
     args = parser.parse_args()
     
     # Update constants with command line values
@@ -73,10 +73,10 @@ def main():
     os.makedirs(output_base_dir, exist_ok=True)
 
     # File path definitions
-    INPUT_ACTIVITIES = args.activities_file
+    INPUT_EXPLORE_USAGE = args.explore_usage_file  # 现在这可以是None
     OUTPUT_TABLE_LIST = os.path.join(output_base_dir, 'updated_table_list.csv')
     EXPORT_COMMANDS_FILE = os.path.join(output_base_dir, 'export_command.txt')
-    EXPORT_COMMANDS_ACTIVE_FILE = os.path.join(output_base_dir, 'export_command_active.txt')
+    EXPORT_COMMANDS_ACTIVE_FILE = os.path.join(output_base_dir, 'export_command_active.txt') if INPUT_EXPLORE_USAGE else None
     
     # If Looker path is provided, change to that directory
     if args.looker_path:
@@ -86,9 +86,14 @@ def main():
         os.chdir(args.looker_path)
         print(f"Changed working directory to: {args.looker_path}")
     
-    print("Loading explore usage frequency...")
-    explore_usage = load_explore_usage(INPUT_ACTIVITIES)
-    print(f"Loaded usage frequency for {len(explore_usage)} explores")
+    # 检查是否提供了探索使用情况文件
+    if INPUT_EXPLORE_USAGE:
+        print(f"Loading explore usage frequency from {INPUT_EXPLORE_USAGE}...")
+        explore_usage = load_explore_usage(INPUT_EXPLORE_USAGE)
+        print(f"Loaded usage frequency for {len(explore_usage)} explores")
+    else:
+        print("No explore usage file provided, calculated_usage will be set to NULL")
+        explore_usage = {}  # 使用空字典作为explore_usage
     
     print("Extracting all views...")
     view_list, view_to_file = extract_all_views()
@@ -122,8 +127,13 @@ def main():
     )
     print("Updated table information in the view list")
     
-    print("Calculating actual usage frequency...")
-    actual_usage = calculate_actual_usage(view_list, explore_usage, explore_to_views)
+    # 根据是否提供explore_usage_file来计算actual_usage
+    if INPUT_EXPLORE_USAGE:
+        print("Calculating actual usage frequency...")
+        actual_usage = calculate_actual_usage(view_list, explore_usage, explore_to_views)
+    else:
+        print("Setting calculated_usage to NULL for all views...")
+        actual_usage = {view_name: None for view_name in view_list}  # 将所有视图的actual_usage设置为None
     
     print("Generating report...")
     sorted_views = generate_report(view_list, actual_usage, unnest_views, actual_table_names, OUTPUT_TABLE_LIST)
@@ -143,7 +153,10 @@ def main():
             default_project=args.default_project,
             snapshot_project=args.snapshot_project
         )
-        print(f"Export commands saved to {EXPORT_COMMANDS_FILE} and {EXPORT_COMMANDS_ACTIVE_FILE}")
+        if INPUT_EXPLORE_USAGE:
+            print(f"Export commands saved to {EXPORT_COMMANDS_FILE} and {EXPORT_COMMANDS_ACTIVE_FILE}")
+        else:
+            print(f"Export commands saved to {EXPORT_COMMANDS_FILE}")
     else:
         print("No GCS bucket specified, skipping export command generation")
     

@@ -8,8 +8,14 @@ from looker_utils.utils import DEFAULT_PROJECT, DEFAULT_DATASET, SNAPSHOT_PROJEC
 
 # Generate result report
 def generate_report(view_list, actual_usage, unnest_views, actual_table_names, output_file):
-    # Sort by actual usage frequency
-    sorted_views = sorted(actual_usage.items(), key=lambda x: x[1], reverse=True)
+    # 判断是否有计算的使用频率值（用户是否提供了activities_file）
+    has_usage_data = all(usage is not None for usage in actual_usage.values())
+    
+    # 如果有使用频率数据，按频率排序，否则按视图名称排序
+    if has_usage_data:
+        sorted_views = sorted(actual_usage.items(), key=lambda x: x[1] if x[1] is not None else 0, reverse=True)
+    else:
+        sorted_views = sorted(actual_usage.items(), key=lambda x: x[0])
     
     # Create a statistics counter to record the number of different citation_types
     citation_type_counts = defaultdict(int)
@@ -101,20 +107,26 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             # Log citation type for debugging
             print(f"DEBUG - Citation type for {view_name}: {citation_type}")
             
+            # 处理calculated_usage为None的情况，输出"NULL"
+            calc_usage_value = "NULL" if usage is None else usage
+            
             writer.writerow([
                 view_name, 
                 0,  # Original usage frequency is 0, because we no longer use table_list.csv
-                usage, 
+                calc_usage_value, 
                 table_name, 
                 citation_type, 
                 ';'.join(formatted_additional_tables) if formatted_additional_tables else ''
             ])
     
-    # Print the top 20 most used views
-    print("Top 20 most used views (sorted by calculated usage frequency):")
-    print("View Name,Original Usage Frequency,Calculated Usage Frequency")
-    for view_name, usage in sorted_views[:20]:
-        print(f"{view_name},0,{usage}")
+    # 仅当有usage数据时才输出前20个最常用视图
+    if has_usage_data:
+        print("Top 20 most used views (sorted by calculated usage frequency):")
+        print("View Name,Original Usage Frequency,Calculated Usage Frequency")
+        for view_name, usage in sorted_views[:20]:
+            print(f"{view_name},0,{usage}")
+    else:
+        print("No usage data available (no activities file provided), skipping top views display")
     
     # Print statistics for different view types
     print("\nView citation type statistics:")
@@ -135,7 +147,7 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
     unnest_views (set): Set of views that are unnested from other tables.
     actual_table_names (dict): Dictionary mapping view names to actual table names.
     export_all_file (str): Path to write export commands for all tables.
-    export_active_file (str): Path to write export commands for active tables.
+    export_active_file (str): Path to write export commands for active tables. If None, active tables export will not be generated.
     gcs_bucket (str): Google Cloud Storage bucket name for export destination.
     default_project (str): Default BigQuery project name (like 'curated-dwh').
     snapshot_project (str): Snapshot BigQuery project name (like 'curated-dwh-snapshot').
@@ -166,8 +178,13 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
     for view_name in sample_views:
         print(f"DEBUG - Sample view: {view_name}, table names: {view_list[view_name].get('table_names', [])}")
     
-    # Open two files for writing
-    with open(export_all_file, 'w') as f_all, open(export_active_file, 'w') as f_active:
+    # 创建export_active_file文件的写入器
+    f_active = None
+    if export_active_file:
+        f_active = open(export_active_file, 'w')
+    
+    # 打开all tables文件进行写入
+    with open(export_all_file, 'w') as f_all:
         for view_name, usage in sorted_views:
             # Skip unnest views
             if view_name in unnest_views:
@@ -268,8 +285,8 @@ END;
                             # Write to all tables file
                             f_all.write(export_command)
                             
-                            # If usage frequency is greater than 0, also write to active tables file
-                            if usage > 0 and table_name not in processed_active_tables:
+                            # 只有当f_active存在且usage不为None且大于0时才写入active tables文件
+                            if f_active and usage is not None and usage > 0 and table_name not in processed_active_tables:
                                 f_active.write(export_command)
                                 processed_active_tables.add(table_name)
             except Exception as e:
@@ -277,13 +294,23 @@ END;
                 error_tables.add(view_name)
                 print(f"Error processing view {view_name}: {str(e)}")
     
+    # 如果f_active打开了，关闭它
+    if f_active:
+        f_active.close()
+        print(f"Export commands for active tables saved to {export_active_file}")
+    
     print(f"Export commands for all tables saved to {export_all_file}")
-    print(f"Export commands for active tables saved to {export_active_file}")
     print(f"Generated export commands for {len(processed_tables)} unique tables")
-    print(f"Of these, {len(processed_active_tables)} are active tables (usage frequency > 0)")
+    if export_active_file:
+        print(f"Of these, {len(processed_active_tables)} are active tables (usage frequency > 0)")
     print(f"Skipped {len(skipped_views)} non-actual table views")
     if error_tables:
         print(f"Views with errors during processing: {len(error_tables)}")
+
+    if export_active_file:
+        print(f"Export commands saved to {export_all_file} and {export_active_file}")
+    else:
+        print(f"Export commands saved to {export_all_file}")
 
 # Function to generate a report on Looker view usage
 def generate_view_usage_report(view_list, model_uses, explore_uses, active_explore_list, output_path=None, output_filename="updated_table_list.csv"):

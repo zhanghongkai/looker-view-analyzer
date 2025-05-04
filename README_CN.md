@@ -25,17 +25,29 @@ cd Looker-view-analyzer
 
 ## 使用方法
 
-使用 Python 3 运行脚本：
+### 基本用法
+
+使用此工具的最基本方式是仅提供 Looker 项目的路径：
 
 ```bash
-python main.py --looker_path /Looker项目路径 --activities_file activities.csv --output_dir ./output --export_gs_bucket 你的GCS存储桶名称
+python main.py --looker_path /Looker项目路径
 ```
 
-高级用法（使用自定义项目和数据集设置）：
+这将分析您的 Looker 项目并生成 `updated_table_list.csv` 文件，其中包含所有视图的视图到表映射信息。
+
+### 高级用法
+
+要分析探索使用情况并生成导出命令，您可以使用其他参数：
+
+```bash
+python main.py --looker_path /Looker项目路径 --explore_usage_file explore_usage.csv --export_gs_bucket 你的GCS存储桶名称
+```
+
+使用自定义项目和数据集设置：
 
 ```bash
 python main.py --looker_path /Looker项目路径 \
-               --activities_file activities.csv \
+               --explore_usage_file explore_usage.csv \
                --output_dir ./output \
                --export_gs_bucket 你的GCS存储桶名称 \
                --default_project 自定义项目名 \
@@ -44,10 +56,43 @@ python main.py --looker_path /Looker项目路径 \
                --snapshot_dataset 自定义快照数据集名
 ```
 
+### 可选功能
+
+#### 1. 探索使用分析功能 (--explore_usage_file)
+
+这个功能允许您分析Looker中各个视图的使用频率：
+
+- **功能说明**：通过提供一个包含探索使用数据的CSV文件，工具能够计算每个视图的使用频率
+- **使用方法**：`python main.py --looker_path /Looker项目路径 --explore_usage_file explore_usage.csv`
+- **输入要求**：需要提供CSV格式的探索使用数据文件，该文件应至少包含以下列：
+  - `Query Explore`：Looker 中探索的名称
+  - `Query Model`：探索所属的模型
+  - `History Query Run Count`：探索被查询的次数
+  
+  您可以通过导航到 Looker 管理界面中"Usage"下的"Explores"部分，并将数据导出为 CSV 格式来生成此文件。
+- **输出结果**：
+  - 在`updated_table_list.csv`文件中，会包含`calculated_usage`字段显示每个视图的使用频率
+  - 如果同时提供了`--export_gs_bucket`参数，则会额外生成`export_command_active.txt`文件，其中只包含活跃视图的导出命令
+- **应用场景**：当您需要识别哪些视图是活跃使用的，哪些视图可能废弃不用时，此功能非常有用
+
+#### 2. 导出命令生成功能 (--export_gs_bucket)
+
+这个功能允许您生成用于数据迁移的BigQuery导出命令：
+
+- **功能说明**：通过提供GCS存储桶名称，工具能够生成将数据从BigQuery导出到GCS的命令
+- **使用方法**：`python main.py --looker_path /Looker项目路径 --export_gs_bucket 你的GCS存储桶名称`
+- **输入要求**：需要提供有效的Google Cloud Storage存储桶名称
+- **输出结果**：
+  - 生成`export_command.txt`文件，包含所有表的导出命令
+  - 如果同时提供了`--explore_usage_file`参数，还会额外生成`export_command_active.txt`文件，只包含活跃表的导出命令
+- **应用场景**：当您需要进行数据迁移、备份或从一个BigQuery项目迁移到另一个项目时，此功能非常有用
+
+这两个功能可以单独使用，也可以组合使用以获得更完整的分析和导出能力。组合使用时，您可以只导出活跃使用的表，从而节省存储空间和迁移时间。
+
 ### 命令行参数
 
 - `--looker_path`：Looker 项目目录的路径（如果脚本不在 Looker 项目目录中，则必须提供）
-- `--activities_file`：包含探索活动数据的 CSV 文件路径（默认值：'activities.csv'）
+- `--explore_usage_file`：包含探索活动数据的 CSV 文件路径（可选）。如果未提供，输出中的`calculated_usage`字段将设置为NULL，且不会生成`export_command_active.txt`文件。
 - `--output_dir`：输出文件保存的目录（默认值：当前目录）
 - `--export_gs_bucket`：导出命令的 GCS 存储桶名称（可选）。如果未提供，脚本将分析视图但不会生成导出命令。
 - `--default_project`：默认 BigQuery 项目名称（默认值：'your-company'）
@@ -57,7 +102,13 @@ python main.py --looker_path /Looker项目路径 \
 
 ### 输入文件
 
-- `activities.csv`：包含探索使用数据的 CSV 文件，其中包含探索名称和使用计数的列
+- `explore_usage.csv`：包含探索名称和使用计数的探索使用数据 CSV 文件（可选）。此文件应包含以下列：
+  - `Query Explore`：Looker 中探索的名称
+  - `Query Model`：探索所属的模型
+  - `History Query Run Count`：探索被查询的次数
+  - `User Count`：使用此探索的用户数量
+  
+  您可以通过导航到 Looker 管理界面中"Usage"下的"Explores"部分，并将数据导出为 CSV 格式来生成此文件。
 
 ### 输出文件
 
@@ -65,7 +116,7 @@ python main.py --looker_path /Looker项目路径 \
 
 - `updated_table_list.csv`：所有视图的视图到表映射信息（总是生成）
 - `export_command.txt`：所有表的导出命令（仅当提供 `--export_gs_bucket` 时生成）
-- `export_command_active.txt`：仅活跃表的导出命令（使用频率 > 0 的表）（仅当提供 `--export_gs_bucket` 时生成）
+- `export_command_active.txt`：仅活跃表的导出命令（使用频率 > 0 的表）（仅当同时提供 `--export_gs_bucket` 和 `--explore_usage_file` 时生成）
 
 ## 项目结构
 

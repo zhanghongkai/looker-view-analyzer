@@ -8,14 +8,25 @@ from collections import defaultdict
 # Load explore usage frequency data
 def load_explore_usage(input_file):
     explore_usage = {}
-    with open(input_file, 'r') as f:
-        reader = csv.reader(f)
-        next(reader)  # Skip header row
-        for row in reader:
-            if len(row) >= 3:
-                explore_name = row[0].strip()
-                usage_count = int(row[2].replace(',', ''))
-                explore_usage[explore_name] = usage_count
+    
+    # 检查文件是否存在，如果不存在则返回空字典
+    if not input_file or not os.path.exists(input_file):
+        print(f"Warning: Activities file '{input_file}' does not exist. Setting all calculated_usage values to NULL.")
+        return explore_usage
+    
+    try:
+        with open(input_file, 'r') as f:
+            reader = csv.reader(f)
+            next(reader)  # Skip header row
+            for row in reader:
+                if len(row) >= 3:
+                    explore_name = row[0].strip()
+                    usage_count = int(row[2].replace(',', ''))
+                    explore_usage[explore_name] = usage_count
+    except Exception as e:
+        print(f"Error reading activities file: {e}. Setting all calculated_usage values to NULL.")
+        return {}
+        
     return explore_usage
 
 # Scan all views and models to build a complete view list
