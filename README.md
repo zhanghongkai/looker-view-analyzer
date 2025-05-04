@@ -33,7 +33,7 @@ The most basic way to use this tool is to simply provide the path to your Looker
 python main.py --looker_path /path/to/looker/project
 ```
 
-This will analyze your Looker project and generate the `updated_table_list.csv` file containing view-to-table mapping information for all views.
+This will analyze your Looker project and generate the `view_analysis.csv` file containing view-to-table mapping information for all views.
 
 ### Advanced Usage
 
@@ -71,7 +71,7 @@ This feature allows you to analyze the usage frequency of views in your Looker p
   
   You can generate this file from the Looker Admin interface by navigating to the "Explores" section under "Usage" and exporting the data as CSV.
 - **Output Results**:
-  - The `updated_table_list.csv` file will include a `calculated_usage` field showing the usage frequency of each view
+  - The `view_analysis.csv` file will include a `calculated_usage` field showing the usage frequency of each view
   - If the `--export_gs_bucket` parameter is also provided, an additional `export_command_active.txt` file will be generated, containing export commands only for active views
 - **Use Cases**: This feature is particularly useful when you need to identify which views are actively used and which ones might be obsolete
 
@@ -114,7 +114,7 @@ These two features can be used independently or in combination for more comprehe
 
 The script generates up to three output files:
 
-- `updated_table_list.csv`: View-to-table mapping information for all views (always generated)
+- `view_analysis.csv`: View-to-table mapping information for all views (always generated)
 - `export_command.txt`: Export commands for all tables (only generated if `--export_gs_bucket` is provided)
 - `export_command_active.txt`: Export commands for active tables only (tables with usage frequency > 0) (only generated if both `--export_gs_bucket` and `--explore_usage_file` are provided)
 

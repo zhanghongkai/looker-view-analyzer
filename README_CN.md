@@ -33,7 +33,7 @@ cd Looker-view-analyzer
 python main.py --looker_path /Looker项目路径
 ```
 
-这将分析您的 Looker 项目并生成 `updated_table_list.csv` 文件，其中包含所有视图的视图到表映射信息。
+这将分析您的 Looker 项目并生成 `view_analysis.csv` 文件，其中包含所有视图的视图到表映射信息。
 
 ### 高级用法
 
@@ -71,7 +71,7 @@ python main.py --looker_path /Looker项目路径 \
   
   您可以通过导航到 Looker 管理界面中"Usage"下的"Explores"部分，并将数据导出为 CSV 格式来生成此文件。
 - **输出结果**：
-  - 在`updated_table_list.csv`文件中，会包含`calculated_usage`字段显示每个视图的使用频率
+  - 在`view_analysis.csv`文件中，会包含`calculated_usage`字段显示每个视图的使用频率
   - 如果同时提供了`--export_gs_bucket`参数，则会额外生成`export_command_active.txt`文件，其中只包含活跃视图的导出命令
 - **应用场景**：当您需要识别哪些视图是活跃使用的，哪些视图可能废弃不用时，此功能非常有用
 
@@ -114,7 +114,7 @@ python main.py --looker_path /Looker项目路径 \
 
 脚本最多生成三个输出文件：
 
-- `updated_table_list.csv`：所有视图的视图到表映射信息（总是生成）
+- `view_analysis.csv`：所有视图的视图到表映射信息（总是生成）
 - `export_command.txt`：所有表的导出命令（仅当提供 `--export_gs_bucket` 时生成）
 - `export_command_active.txt`：仅活跃表的导出命令（使用频率 > 0 的表）（仅当同时提供 `--export_gs_bucket` 和 `--explore_usage_file` 时生成）
 

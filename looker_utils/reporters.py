@@ -8,10 +8,10 @@ from looker_utils.utils import DEFAULT_PROJECT, DEFAULT_DATASET, SNAPSHOT_PROJEC
 
 # Generate result report
 def generate_report(view_list, actual_usage, unnest_views, actual_table_names, output_file):
-    # 判断是否有计算的使用频率值（用户是否提供了activities_file）
+    # Check if calculated usage values are available (whether the user provided an activities_file)
     has_usage_data = all(usage is not None for usage in actual_usage.values())
     
-    # 如果有使用频率数据，按频率排序，否则按视图名称排序
+    # Sort by frequency if usage data is available, otherwise sort by view name
     if has_usage_data:
         sorted_views = sorted(actual_usage.items(), key=lambda x: x[1] if x[1] is not None else 0, reverse=True)
     else:
@@ -107,7 +107,7 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             # Log citation type for debugging
             print(f"DEBUG - Citation type for {view_name}: {citation_type}")
             
-            # 处理calculated_usage为None的情况，输出"NULL"
+            # Handle the case where calculated_usage is None, output "NULL"
             calc_usage_value = "NULL" if usage is None else usage
             
             writer.writerow([
@@ -119,7 +119,7 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                 ';'.join(formatted_additional_tables) if formatted_additional_tables else ''
             ])
     
-    # 仅当有usage数据时才输出前20个最常用视图
+    # Only output the top 20 most frequently used views when usage data is available
     if has_usage_data:
         print("Top 20 most used views (sorted by calculated usage frequency):")
         print("View Name,Original Usage Frequency,Calculated Usage Frequency")
@@ -178,12 +178,12 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
     for view_name in sample_views:
         print(f"DEBUG - Sample view: {view_name}, table names: {view_list[view_name].get('table_names', [])}")
     
-    # 创建export_active_file文件的写入器
+    # Create writer for export_active_file
     f_active = None
     if export_active_file:
         f_active = open(export_active_file, 'w')
     
-    # 打开all tables文件进行写入
+    # Open all tables file for writing
     with open(export_all_file, 'w') as f_all:
         for view_name, usage in sorted_views:
             # Skip unnest views
@@ -285,7 +285,7 @@ END;
                             # Write to all tables file
                             f_all.write(export_command)
                             
-                            # 只有当f_active存在且usage不为None且大于0时才写入active tables文件
+                            # Only write to active tables file if f_active exists and usage is not None and > 0
                             if f_active and usage is not None and usage > 0 and table_name not in processed_active_tables:
                                 f_active.write(export_command)
                                 processed_active_tables.add(table_name)
@@ -294,7 +294,7 @@ END;
                 error_tables.add(view_name)
                 print(f"Error processing view {view_name}: {str(e)}")
     
-    # 如果f_active打开了，关闭它
+    # If f_active was opened, close it
     if f_active:
         f_active.close()
         print(f"Export commands for active tables saved to {export_active_file}")
@@ -313,7 +313,7 @@ END;
         print(f"Export commands saved to {export_all_file}")
 
 # Function to generate a report on Looker view usage
-def generate_view_usage_report(view_list, model_uses, explore_uses, active_explore_list, output_path=None, output_filename="updated_table_list.csv"):
+def generate_view_usage_report(view_list, model_uses, explore_uses, active_explore_list, output_path=None, output_filename="view_analysis.csv"):
     """
     Generates a CSV report of Looker view usage.
     
