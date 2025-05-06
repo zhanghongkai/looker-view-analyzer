@@ -122,7 +122,6 @@ def extract_tables_from_view_content(view_name, content):
     
     # Improvement: If multiple table references are found, try to select the most relevant one as the main table
     if len(tables) > 0:
-        # Handle fact_purchased_items special case: Check if table name is incorrect (contains project name, like curated-dwh.analytics_prod.curated-dwh)
         if len(tables) > 1:
             for i, table in enumerate(tables):
                 parts = table.split('.')
@@ -167,16 +166,24 @@ def extract_tables_from_view_content(view_name, content):
             if primary_table in tables:
                 tables.remove(primary_table)
             tables.insert(0, primary_table)
-        
-        # Special handling for fact_purchased_items view
-        if view_name == 'fact_purchased_items' and len(tables) > 0:
-            # Find fact_purchased_line_items table, set it as the main table
+            
+        # Prioritize tables with shortest actual table name
+        if len(tables) > 1:
+            # Extract actual table names (last part of full table path)
+            table_with_lengths = []
             for table in tables:
-                if 'fact_purchased_line_items' in table and not table.endswith('_streaming') and not table.endswith('_flip'):
-                    # Set it as the main table
-                    tables.remove(table)
-                    tables.insert(0, table)
-                    break
+                parts = table.split('.')
+                actual_table = parts[-1] if len(parts) > 0 else table
+                table_with_lengths.append((len(actual_table), table))
+            
+            # Sort by actual table name length
+            table_with_lengths.sort()
+            
+            if table_with_lengths:
+                shortest_table = table_with_lengths[0][1]
+                # Move the table with shortest name to the front
+                tables.remove(shortest_table)
+                tables.insert(0, shortest_table)
     
     # New: If derived_table is used but actually references a real table, set citation_type to 'native'
     if derived_block and tables:
