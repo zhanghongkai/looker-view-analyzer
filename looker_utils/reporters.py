@@ -7,7 +7,7 @@ import os
 from looker_utils.utils import DEFAULT_PROJECT, DEFAULT_DATASET, SNAPSHOT_PROJECT, SNAPSHOT_DATASET
 
 # Generate result report
-def generate_report(view_list, actual_usage, unnest_views, actual_table_names, output_file, explore_to_views=None):
+def generate_report(view_list, actual_usage, unnest_views, actual_table_names, output_file, explore_to_views=None, include_source_info=False):
     # Check if calculated usage values are available (whether the user provided an activities_file)
     has_usage_data = all(usage is not None for usage in actual_usage.values())
     
@@ -40,12 +40,20 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     # Write to CSV file
     with open(output_file, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['view_name', 'explore_count', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables'])
+        
+        # 根据 include_source_info 参数决定标题行包含哪些列
+        header = ['view_name', 'explore_count', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables']
+        # 只有当include_source_info为True时，才添加source_type和source_definition列
+        if include_source_info:
+            header.extend(['source_type', 'source_definition'])
+        writer.writerow(header)
         
         for view_name, usage in sorted_views:
             table_name = ""
             citation_type = "native"  # Default type
             additional_tables = []
+            source_type = ""  # 数据来源类型
+            source_definition = ""  # 数据来源定义
             
             # Prioritize getting citation type from view_list
             if view_name in view_list:
@@ -65,6 +73,11 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                         if citation_type == "derived" and table_name:
                             citation_type = "native"
                             print(f"DEBUG - Changed citation_type for {view_name} from 'derived' to 'native' because it has a table_name")
+                
+                # 获取视图数据来源定义
+                if include_source_info:
+                    source_type = view_list[view_name].get('source_type', '')
+                    source_definition = view_list[view_name].get('source_definition', '')
             
             # Only try to get from actual_table_names if there's no table name in view_list
             elif view_name in actual_table_names and actual_table_names[view_name]:
@@ -135,14 +148,22 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             # Get explore count for this view
             explore_count = view_to_explore_count.get(view_name, 0)
             
-            writer.writerow([
+            # 准备基本行数据
+            row_data = [
                 view_name, 
                 explore_count,
                 calc_usage_value, 
                 table_name, 
                 citation_type, 
                 ';'.join(formatted_additional_tables) if formatted_additional_tables else ''
-            ])
+            ]
+            
+            # 根据 include_source_info 参数决定是否添加源信息列
+            if include_source_info:
+                row_data.extend([source_type, source_definition])
+                
+            # 写入CSV行
+            writer.writerow(row_data)
     
     # Only output the top 20 most frequently used views when usage data is available
     if has_usage_data:

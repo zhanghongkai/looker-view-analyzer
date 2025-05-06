@@ -10,11 +10,10 @@ import sys
 import argparse
 import glob
 from looker_utils.data_loaders import load_explore_usage, extract_all_views
-from looker_utils.extractors import extract_actual_table_names
 from looker_utils.analyzers import (
-    analyze_explores,
     calculate_actual_usage,
-    update_view_table_info
+    update_view_table_info,
+    analyze_explores_and_extract_tables
 )
 from looker_utils.reporters import generate_report, generate_export_commands
 from looker_utils.utils import set_global_project_settings
@@ -36,6 +35,7 @@ def main():
     parser.add_argument('--snapshot_dataset', default='analytics_prod_snapshots', help='Snapshot BigQuery dataset name (default: analytics_prod_snapshots)')
     parser.add_argument('--output_dir', default='.', help='Directory to save output files (default: current directory)')
     parser.add_argument('--explore_usage_file', help='Path to explore usage CSV file (optional, if not provided calculated_usage will be NULL)')
+    parser.add_argument('--include_source_info', action='store_true', help='Include source definitions in output (may result in large files)')
     args = parser.parse_args()
     
     # Update constants with command line values
@@ -142,19 +142,15 @@ def main():
     view_list, view_to_file = extract_all_views()
     print(f"Extracted {len(view_list)} views")
     
-    print("Extracting actual table names from view definitions...")
-    actual_table_names, view_citation_types = extract_actual_table_names()
-    print(f"Extracted table names for {len(actual_table_names)} views")
-    
-    # Calculate the total number of different table names extracted
+    print("分析探索关系并提取表信息...")
+    explore_to_views, unnest_views, explore_list, explore_to_model, view_from_alias, actual_table_names, view_citation_types, view_source_definitions = analyze_explores_and_extract_tables()
+    print(f"分析了 {len(explore_to_views)} 个探索")
+    print(f"识别了 {len(unnest_views)} 个通过unnest创建的视图")
+    print(f"识别了 {len(view_from_alias)} 个别名视图关系")
+    print(f"提取了 {len(actual_table_names)} 个视图的表名")
+    print(f"提取了 {len(view_source_definitions)} 个视图的数据来源定义")
     total_tables = sum(len(tables) for tables in actual_table_names.values())
-    print(f"Total table references extracted: {total_tables}")
-    
-    print("Analyzing relationships between explores and views...")
-    explore_to_views, unnest_views, explore_list, explore_to_model, view_from_alias = analyze_explores()
-    print(f"Analyzed {len(explore_to_views)} explores")
-    print(f"Identified {len(unnest_views)} views created through unnest")
-    print(f"Identified {len(view_from_alias)} alias views")
+    print(f"提取的表引用总数: {total_tables}")
     
     # Update table information in the view list
     view_list = update_view_table_info(
@@ -163,6 +159,7 @@ def main():
         unnest_views, 
         view_citation_types, 
         view_from_alias,
+        view_source_definitions,
         default_project=args.default_project,
         default_dataset=args.default_dataset,
         snapshot_project=args.snapshot_project,
@@ -179,7 +176,7 @@ def main():
         actual_usage = {view_name: None for view_name in view_list}  # Set actual_usage to None for all views
     
     print("Generating report...")
-    sorted_views = generate_report(view_list, actual_usage, unnest_views, actual_table_names, OUTPUT_TABLE_LIST, explore_to_views)
+    sorted_views = generate_report(view_list, actual_usage, unnest_views, actual_table_names, OUTPUT_TABLE_LIST, explore_to_views, include_source_info=args.include_source_info)
     print(f"Done! Results saved to {OUTPUT_TABLE_LIST}")
     
     # Only generate export commands if --export_gs_bucket parameter is provided

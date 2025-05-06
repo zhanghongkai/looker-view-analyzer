@@ -114,35 +114,53 @@
 
 ### 3.2 数据提取
 
-1. 加载 Explore 使用频率数据（如果提供）(`data_loaders.py` 中的 `load_explore_usage()`)
-2. 提取所有视图 (`data_loaders.py` 中的 `extract_all_views()`)
-3. 从视图定义中提取实际表名 (`extractors.py` 中的 `extract_actual_table_names()`)
+1. 加载 Explore 使用频率数据（如果提供）(`data_loaders.py` 中的 `load_explore_usage()` 函数)
+2. 提取所有视图 (`data_loaders.py` 中的 `extract_all_views()` 函数)
 
-### 3.3 关系分析
+### 3.3 关系分析与表信息提取
 
-1. 分析 Explores 和视图之间的关系 (`analyzers.py` 中的 `analyze_explores()`)
-2. 识别通过 UNNEST 创建的视图 (`analyzers.py` 中的 `analyze_explores()`)
-3. 识别通过别名创建的视图 (`analyzers.py` 中的 `analyze_explores()`)
+1. 分析 Explores 和视图之间的关系 (`analyzers.py` 中的 `analyze_explores_and_extract_tables()` 函数，内部调用 `analyze_explores()`)
+   - 识别视图之间的引用关系
+   - 识别通过 UNNEST 创建的视图
+   - 处理视图别名和 FROM 子句
+
+2. 记录视图的原始数据来源定义 (`analyzers.py` 中的 `extract_view_source_definitions()` 函数，在 `extract_tables_from_views()` 前调用)
+   - 提取每个视图的原始sql_table_name或derived_table定义
+   - 将数据来源定义保存到视图信息中
+   - 将源定义信息包含在最终输出的view_analysis.csv中，便于后续调试
+
+3. 从视图的数据来源定义中提取表信息 (`analyzers.py` 中的 `analyze_explores_and_extract_tables()` 函数，内部调用 `extract_tables_from_views()` 和 `extract_tables_from_view_content()`)
+   - 处理 SQL 表基础视图 (`sql_table_name: thelook.users;;`)
+   - 处理 SQL 查询派生表 (`derived_table: { sql: SELECT ... }`)
+   - 处理基于 explore_source 的原生派生表 (使用 `contains_explore_source()` 函数检测)
+   - 处理使用 sql_on 的连接定义
+   - 处理使用 sql 参数的连接定义
+   - 处理使用 UNNEST 的嵌套数据连接
+   - 处理引号差异（`extract_tables_from_view_content()` 函数中处理 BigQuery、Snowflake 的不同引号样式）
+
+4. 对提取的表信息进行规范化处理 (`analyzers.py` 中的 `update_view_table_info()` 函数)
+   - 识别三段式表引用（BigQuery: project.dataset.table / Snowflake: database.schema.table）
+   - 应用默认项目前缀（如果需要）
 
 ### 3.4 表信息更新
 
-1. 更新视图列表中的表信息 (`analyzers.py` 中的 `update_view_table_info()`)
-2. 处理默认项目前缀和特殊表类型 (`analyzers.py` 中的 `update_view_table_info()` 和 `utils.py` 中的相关函数)
+1. 更新视图列表中的表信息 (`analyzers.py` 中的 `update_view_table_info()` 函数)
+2. 处理默认项目前缀和特殊表类型 (`analyzers.py` 中的 `update_view_table_info()` 函数和 `utils.py` 中的 `auto_detect_related_tables()` 函数)
 
 ### 3.5 使用频率计算
 
-1. 根据 Explore 使用频率计算视图的实际使用频率 (`analyzers.py` 中的 `calculate_actual_usage()`)
-2. 如果未提供使用频率数据，则将所有视图的计算使用频率设置为 NULL (`main.py`)
+1. 根据 Explore 使用频率计算视图的实际使用频率 (`analyzers.py` 中的 `calculate_actual_usage()` 函数)
+2. 如果未提供使用频率数据，则将所有视图的计算使用频率设置为 NULL (`main.py` 中的主流程)
 
 ### 3.6 报告生成
 
-1. 生成视图分析报告 (`reporters.py` 中的 `generate_report()`)
-2. 将结果保存到 CSV 文件中 (`reporters.py` 中的 `generate_report()`)
+1. 生成视图分析报告 (`reporters.py` 中的 `generate_report()` 函数)
+2. 将结果保存到 CSV 文件中 (`reporters.py` 中的 `generate_report()` 函数)
 
 ### 3.7 导出命令生成（可选）
 
-1. 如果提供了 GCS 存储桶名称，生成导出命令 (`reporters.py` 中的 `generate_export_commands()`)
-2. 将导出命令保存到文件中 (`reporters.py` 中的 `generate_export_commands()`)
+1. 如果提供了 GCS 存储桶名称，生成导出命令 (`reporters.py` 中的 `generate_export_commands()` 函数)
+2. 将导出命令保存到文件中 (`reporters.py` 中的 `generate_export_commands()` 函数)
 
 ## 4. 数据库兼容性
 
