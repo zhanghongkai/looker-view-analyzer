@@ -9,7 +9,7 @@ from collections import defaultdict
 def load_explore_usage(input_file):
     explore_usage = {}
     
-    # 检查文件是否存在，如果不存在则返回空字典
+    # Check if the file exists, if not return an empty dictionary
     if not input_file or not os.path.exists(input_file):
         print(f"Warning: Activities file '{input_file}' does not exist. Setting all calculated_usage values to NULL.")
         return explore_usage

@@ -23,7 +23,7 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     # Calculate explore count for each view
     view_to_explore_count = defaultdict(int)
     if explore_to_views:
-        # 反转explore_to_views字典，计算每个view被多少个explore使用
+        # Reverse the explore_to_views dictionary, calculate how many explores use each view
         for explore_name, views in explore_to_views.items():
             for view in views:
                 view_to_explore_count[view] += 1
@@ -52,7 +52,7 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                         if len(table_names) > 1:
                             additional_tables = table_names[1:]  # Additional table names
                             
-                        # 新增：如果citation_type为derived但实际有表名，修改为native
+                        # New: If citation_type is derived but actually has a table name, change it to native
                         if citation_type == "derived" and table_name:
                             citation_type = "native"
                             print(f"DEBUG - Changed citation_type for {view_name} from 'derived' to 'native' because it has a table_name")
