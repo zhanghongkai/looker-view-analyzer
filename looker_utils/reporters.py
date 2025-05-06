@@ -51,6 +51,11 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                         table_name = table_names[0]  # Main table name
                         if len(table_names) > 1:
                             additional_tables = table_names[1:]  # Additional table names
+                            
+                        # 新增：如果citation_type为derived但实际有表名，修改为native
+                        if citation_type == "derived" and table_name:
+                            citation_type = "native"
+                            print(f"DEBUG - Changed citation_type for {view_name} from 'derived' to 'native' because it has a table_name")
             
             # Only try to get from actual_table_names if there's no table name in view_list
             elif view_name in actual_table_names and actual_table_names[view_name]:

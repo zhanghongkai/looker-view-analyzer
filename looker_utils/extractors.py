@@ -120,6 +120,68 @@ def extract_tables_from_view_content(view_name, content):
                 if table not in tables:
                     tables.append(table)
     
+    # 改进：如果找到多个表引用，尝试选择最相关的作为主表
+    if len(tables) > 0:
+        # 处理fact_purchased_items特殊情况：检查表名是否不正确（包含项目名，如curated-dwh.analytics_prod.curated-dwh）
+        if len(tables) > 1:
+            for i, table in enumerate(tables):
+                parts = table.split('.')
+                if len(parts) == 3:
+                    # 检查表名部分是否等于项目名部分
+                    if parts[0] == parts[2]:
+                        # 这是一个可能的错误提取，尝试找到更好的替代表
+                        for other_table in tables:
+                            if other_table != table and other_table.endswith(view_name) or view_name in other_table:
+                                # 找到更相关的表，将其作为主表
+                                tables.remove(other_table)
+                                tables.insert(0, other_table)
+                                break
+                        
+                        # 移除错误的表引用
+                        tables.remove(table)
+                        break
+        
+        # 尝试查找与视图名相似的表名
+        view_base_name = view_name.replace('fact_', '').replace('dim_', '')
+        matched_tables = []
+        
+        for table in tables:
+            table_parts = table.split('.')
+            if len(table_parts) == 3:
+                table_base = table_parts[2]  # 从全路径中提取表名
+            elif len(table_parts) == 2:
+                table_base = table_parts[1]
+            else:
+                table_base = table_parts[0]
+                
+            # 检查表名是否与视图名相似
+            table_base = table_base.replace('fact_', '').replace('dim_', '')
+            
+            if view_base_name in table_base or table_base in view_base_name:
+                matched_tables.append(table)
+        
+        # 如果找到匹配的表，使用第一个匹配的表作为主表
+        if matched_tables:
+            primary_table = matched_tables[0]
+            # 将该表移到tables列表的首位
+            if primary_table in tables:
+                tables.remove(primary_table)
+            tables.insert(0, primary_table)
+        
+        # 特殊处理fact_purchased_items视图
+        if view_name == 'fact_purchased_items' and len(tables) > 0:
+            # 查找fact_purchased_line_items表，将其设为主表
+            for table in tables:
+                if 'fact_purchased_line_items' in table and not table.endswith('_streaming') and not table.endswith('_flip'):
+                    # 将其设为主表
+                    tables.remove(table)
+                    tables.insert(0, table)
+                    break
+    
+    # 新增：如果使用了derived_table但实际引用了真实表，将citation_type设置为'native'
+    if derived_block and tables:
+        return tables, 'native'
+    
     return tables, 'native' if tables else ''
 
 # Extract actual table names from all view definition files

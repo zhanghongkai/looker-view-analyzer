@@ -86,6 +86,7 @@ export_command.txt
 export_command_active.txt
 view_analysis.csv
 updated_table_list.csv
+output.log
 
 # Comparison directory
 /compare/ 
