@@ -210,3 +210,51 @@ MIT 许可证
 5. 开一个拉取请求
 
 如有问题或建议，请联系此项目的唯一作者和维护者：[张鸿凯 (Hongkai Zhang)](https://github.com/zhanghongkai) 
+
+## 最近更新
+
+### 非标准目录结构支持
+
+该工具现已增强以支持使用非标准目录结构的Looker项目。它现在可以检测和分析：
+
+- 根目录中的模型文件（*.model.lkml）
+- 项目任何子目录中的视图文件
+- 在非标准位置定义的视图和探索
+
+运行工具时，它将自动扫描：
+1. 标准目录（`views/`和`models/`）
+2. 根目录中的模型文件（*.model.lkml）
+3. 所有子目录中的视图文件（*.view.lkml）
+
+这确保了无论视图和探索位于项目结构中的什么位置，都能被找到。该工具会显示关于在非标准位置发现的文件的信息，帮助您了解项目如何被分析。
+
+目录结构分析输出示例：
+```
+Analyzing directory structure...
+Found 120 view files in standard 'views/' directory
+Found 5 model files in standard 'models/' directory
+Found 230 view files in non-standard locations
+Found 4 model files in root directory
+
+Non-standard model files found:
+  - FLIP_MONGO.model.lkml
+  - FlipPosts2.model.lkml
+  - Orders_TWO.model.lkml
+  - flipfit_users.model.lkml
+
+Sample non-standard view file locations:
+  - core_views/
+  - core_views/ads/
+  - core_views/brands/
+  - core_views/items/
+  - flip_views/
+  - jxin_views/
+  - jxin_views/brands/
+  - manual_upload/
+  - temp_views/
+  - ... and 15 more directories
+
+All files will be processed in the analysis.
+```
+
+通过这次更新，工具现在可以适应各种Looker项目结构，特别是那些将视图和模型文件放在非标准位置的项目。 

@@ -59,16 +59,39 @@ def extract_tables_from_view_content(view_name, content):
     else:
         derived_block = None  # Ensure variable exists
     
+    # Remove double quotes from uncommented_content for better table name matching
+    # This helps handle different quoting styles in Looker (double quotes, backticks, or no quotes)
+    uncommented_content_no_quotes = uncommented_content.replace('"', '')
+    
     # Try to find sql_table_name definition (excluding comment lines)
     # Original regex only matches table names enclosed in backticks
     # sql_table_match = re.search(r'sql_table_name:\s+`([^`]+)`', uncommented_content)
     
     # New regex can handle project name, dataset and table name separately enclosed in backticks
-    sql_table_match = re.search(r'sql_table_name:\s+(?:`?([^`\s.]+)`?\.`?([^`\s.]+)`?\.`?([^`\s.;]+)`?|`([^`]+)`)', uncommented_content)
+    # Also handles standard format without quotes and with removed double quotes
+    sql_table_match = re.search(
+        r'sql_table_name:\s+(?:'
+        r'`?([^`\s.]+)`?\.`?([^`\s.]+)`?\.`?([^`\s.;]+)`?|'  # Format with potential backticks: `project`.`dataset`.`table`
+        r'`([^`]+)`|'  # Format with entire reference in backticks: `project.dataset.table`
+        r'([^`\s.]+)\.([^`\s.]+)\.([^`\s.;]+)|'  # Format without quotes: project.dataset.table
+        r'([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)'  # Simple format after double quotes removal
+        r')',
+        uncommented_content_no_quotes
+    )
     
     if sql_table_match:
         if sql_table_match.group(4):  # Original format: `project.dataset.table`
             table_name = sql_table_match.group(4)
+        elif sql_table_match.group(7):  # Format without quotes or backticks: project.dataset.table
+            project = sql_table_match.group(5)
+            dataset = sql_table_match.group(6)
+            table = sql_table_match.group(7)
+            table_name = f"{project}.{dataset}.{table}"
+        elif sql_table_match.group(10):  # Simple format after double quotes removal
+            project = sql_table_match.group(8)
+            dataset = sql_table_match.group(9)
+            table = sql_table_match.group(10)
+            table_name = f"{project}.{dataset}.{table}"
         else:  # New format: `project`.`dataset`.`table` or variants
             project = sql_table_match.group(1)
             dataset = sql_table_match.group(2)
@@ -80,27 +103,32 @@ def extract_tables_from_view_content(view_name, content):
     
     # Check the content of derived_table (if extracted)
     if derived_block:
+        # Remove double quotes from derived_block for better SQL parsing
+        derived_block_no_quotes = derived_block.replace('"', '')
         
         # Extract different formats of SQL definitions
         sql_match = None
         # 1) explicit block until ;; (LookML standard)
-        sql_match = re.search(r'sql\s*:\s*([\s\S]*?);;', derived_block, re.DOTALL)
+        sql_match = re.search(r'sql\s*:\s*([\s\S]*?);;', derived_block_no_quotes, re.DOTALL)
         if not sql_match:
             # 2) triple quotes / braces fallback
             for pattern in [r'sql:\s*{{{([^}]+)}}}', r'sql:\s*"""([\s\S]+?)"""', r'sql:\s*{([\s\S]+?)}', r'sql:\s*"([^"]+)"']:
-                sql_match = re.search(pattern, derived_block, re.DOTALL)
+                sql_match = re.search(pattern, derived_block_no_quotes, re.DOTALL)
                 if sql_match:
                     break
         
         if sql_match:
             sql_text = sql_match.group(1)
+            # Remove double quotes from SQL text for better table extraction
+            sql_text_no_quotes = sql_text.replace('"', '')
+            
             # First check if there are Liquid conditional blocks
-            liquid_tables = extract_tables_from_liquid_block(sql_text, False)
+            liquid_tables = extract_tables_from_liquid_block(sql_text_no_quotes, False)
             if liquid_tables:
                 tables.extend(liquid_tables)
             
             # Then use more general SQL parsing to extract table names
-            extracted_tables = extract_tables_from_sql(sql_text)
+            extracted_tables = extract_tables_from_sql(sql_text_no_quotes)
             for table in extracted_tables:
                 if table not in tables:
                     tables.append(table)
@@ -108,14 +136,21 @@ def extract_tables_from_view_content(view_name, content):
         # If no SQL definition is found, search for table references directly in the entire derived_block
         else:
             # Check directly referenced tables (using backticks)
-            table_refs = re.finditer(r'`([^`]+\.[^`]+\.[^`]+)`', derived_block)
+            table_refs = re.finditer(r'`([^`]+\.[^`]+\.[^`]+)`', derived_block_no_quotes)
             for match in table_refs:
                 table_name = match.group(1)
                 if table_name not in tables:
                     tables.append(table_name)
             
+            # Check for regular references without backticks (e.g., "schema.dataset.table")
+            table_refs_no_backticks = re.finditer(r'([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)', derived_block_no_quotes)
+            for match in table_refs_no_backticks:
+                table_name = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+                if table_name not in tables:
+                    tables.append(table_name)
+            
             # Check table references in Liquid conditional blocks
-            liquid_tables = extract_tables_from_liquid_block(derived_block, False)
+            liquid_tables = extract_tables_from_liquid_block(derived_block_no_quotes, False)
             for table in liquid_tables:
                 if table not in tables:
                     tables.append(table)
@@ -196,14 +231,20 @@ def extract_actual_table_names():
     actual_table_names = {}
     view_citation_types = {}  # New: record citation type for each view
     
-    # Scan all view files
+    # Scan all view files in any directory
     view_files = glob.glob('views/**/*.view.lkml', recursive=True)
+    # Also search in other directories for view files
+    view_files += glob.glob('**/*.view.lkml', recursive=True)
+    # Remove duplicates
+    view_files = list(set(view_files))
     
-    # Create a set to record view files in the derived_views directory
-    derived_view_files = [f for f in view_files if 'derived_views/' in f]
-    print(f"DEBUG - Found {len(derived_view_files)} view files in the derived_views directory")
+    print(f"DEBUG - Found {len(view_files)} view files across all directories")
     
-    # First process views in the derived_views directory, they might be based on explore_source
+    # Create a set to record view files in directories that might contain derived views
+    derived_view_files = [f for f in view_files if 'derived_views/' in f or 'derived_tables/' in f or 'flip_views/derived_tables/' in f]
+    print(f"DEBUG - Found {len(derived_view_files)} potential derived view files")
+    
+    # First process views in derived_views-like directories, they might be based on explore_source
     for file_path in derived_view_files:
         try:
             with open(file_path, 'r') as f:
@@ -215,7 +256,7 @@ def extract_actual_table_names():
                     view_match = re.search(r'view:\s+(\w+)\s+{', content)
                     if view_match:
                         view_name = view_match.group(1)
-                        print(f"DEBUG - Found potential explore_source view in derived_views directory: {view_name}")
+                        print(f"DEBUG - Found potential explore_source view in derived directory: {view_name}")
                         
                         # Check if it actually contains explore_source
                         has_explore, explore_name = contains_explore_source(content, view_name)
@@ -229,7 +270,7 @@ def extract_actual_table_names():
     for file_path in view_files:
         try:
             # Skip already processed derived_views
-            if 'derived_views/' in file_path and any(view_name in view_citation_types for view_name in view_citation_types if view_citation_types[view_name] == 'derived_explore'):
+            if file_path in derived_view_files and any(view_name in view_citation_types for view_name in view_citation_types if view_citation_types[view_name] == 'derived_explore'):
                 continue
                 
             with open(file_path, 'r') as f:

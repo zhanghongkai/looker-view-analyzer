@@ -53,6 +53,9 @@ def auto_detect_related_tables(base_table, is_debug=False):
 def extract_tables_from_liquid_block(content, is_debug=False):
     tables = []
     
+    # Remove double quotes to normalize table reference formats
+    content = content.replace('"', '')
+    
     # Extract table references from Liquid conditional blocks
     liquid_patterns = [
         # Table references in if-else blocks, using backticks
@@ -153,6 +156,11 @@ def extract_tables_from_sql(sql, is_debug=False):
     sql = re.sub(r'--.*?(\n|$)', ' ', sql)
     sql = re.sub(r'/\*.*?\*/', ' ', sql, flags=re.DOTALL)
     
+    # Remove double quotes to handle different quoting styles consistently
+    # Double quotes in Looker SQL are often used for column names and table references
+    # This helps normalize between "schema"."table" and `schema`.`table` formats
+    sql = sql.replace('"', '')
+    
     # Clean up whitespace for easier processing
     sql = re.sub(r'\s+', ' ', sql)
     
@@ -232,6 +240,9 @@ def extract_tables_from_sql(sql, is_debug=False):
 def contains_explore_source(content, view_name=""):
     """Check if the content contains an explore_source definition"""
     debug_prefix = f"DEBUG - [{view_name}] " if view_name else "DEBUG - "
+    
+    # Remove double quotes to normalize formats
+    content = content.replace('"', '')
     
     # First directly check for keywords
     if 'explore_source:' in content or 'explore_source :' in content:

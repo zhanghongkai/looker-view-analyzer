@@ -11,15 +11,6 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     # Check if calculated usage values are available (whether the user provided an activities_file)
     has_usage_data = all(usage is not None for usage in actual_usage.values())
     
-    # Sort by frequency if usage data is available, otherwise sort by view name
-    if has_usage_data:
-        sorted_views = sorted(actual_usage.items(), key=lambda x: x[1] if x[1] is not None else 0, reverse=True)
-    else:
-        sorted_views = sorted(actual_usage.items(), key=lambda x: x[0])
-    
-    # Create a statistics counter to record the number of different citation_types
-    citation_type_counts = defaultdict(int)
-    
     # Calculate explore count for each view
     view_to_explore_count = defaultdict(int)
     if explore_to_views:
@@ -27,6 +18,24 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
         for explore_name, views in explore_to_views.items():
             for view in views:
                 view_to_explore_count[view] += 1
+    
+    # Sort by calculated_usage first, then by explore_count, both in descending order
+    if has_usage_data:
+        sorted_views = sorted(
+            actual_usage.items(),
+            key=lambda x: (x[1] if x[1] is not None else 0, view_to_explore_count.get(x[0], 0)),
+            reverse=True
+        )
+    else:
+        # If no usage data, sort by explore_count in descending order, then by view name
+        sorted_views = sorted(
+            actual_usage.items(),
+            key=lambda x: (view_to_explore_count.get(x[0], 0), x[0]),
+            reverse=True
+        )
+    
+    # Create a statistics counter to record the number of different citation_types
+    citation_type_counts = defaultdict(int)
     
     # Write to CSV file
     with open(output_file, 'w', newline='') as f:

@@ -8,6 +8,7 @@ and generates export commands for data migration.
 import os
 import sys
 import argparse
+import glob
 from looker_utils.data_loaders import load_explore_usage, extract_all_views
 from looker_utils.extractors import extract_actual_table_names
 from looker_utils.analyzers import (
@@ -85,6 +86,48 @@ def main():
             sys.exit(1)
         os.chdir(args.looker_path)
         print(f"Changed working directory to: {args.looker_path}")
+        
+        # Show directory structure information for the user
+        print("\nAnalyzing directory structure...")
+        
+        # Check for view and model files in standard directories
+        standard_view_files = glob.glob('views/**/*.view.lkml', recursive=True)
+        standard_model_files = glob.glob('models/*.lkml')
+        
+        # Check for view and model files in non-standard locations
+        root_model_files = glob.glob('*.model.lkml')
+        all_view_files = glob.glob('**/*.view.lkml', recursive=True)
+        
+        # Count non-standard files
+        nonstandard_views = [f for f in all_view_files if f not in standard_view_files]
+        nonstandard_models = [f for f in root_model_files if f not in standard_model_files]
+        
+        print(f"Found {len(standard_view_files)} view files in standard 'views/' directory")
+        print(f"Found {len(standard_model_files)} model files in standard 'models/' directory")
+        print(f"Found {len(nonstandard_views)} view files in non-standard locations")
+        print(f"Found {len(nonstandard_models)} model files in root directory")
+        
+        if nonstandard_models:
+            print("\nNon-standard model files found:")
+            for model_file in nonstandard_models[:5]:  # Show up to 5 examples
+                print(f"  - {model_file}")
+            if len(nonstandard_models) > 5:
+                print(f"  - ... and {len(nonstandard_models) - 5} more")
+        
+        if nonstandard_views:
+            print("\nSample non-standard view file locations:")
+            nonstandard_dirs = set()
+            for view_file in nonstandard_views:
+                nonstandard_dirs.add(os.path.dirname(view_file))
+            
+            # Show up to 10 unique directories
+            for i, directory in enumerate(sorted(nonstandard_dirs)):
+                if i >= 10:
+                    print(f"  - ... and {len(nonstandard_dirs) - 10} more directories")
+                    break
+                print(f"  - {directory}/")
+        
+        print("\nAll files will be processed in the analysis.\n")
     
     # Check if explore usage file is provided
     if INPUT_EXPLORE_USAGE:

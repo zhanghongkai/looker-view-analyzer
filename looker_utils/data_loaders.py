@@ -31,9 +31,28 @@ def load_explore_usage(input_file):
 
 # Scan all views and models to build a complete view list
 def extract_all_views():
-    # Collect all view files
+    print("Extracting views from all possible directories...")
+    
+    # Collect all view and model files from standard directories
     view_files = glob.glob('views/**/*.view.lkml', recursive=True)
-    model_files = glob.glob('models/*.lkml')  # Add model files
+    model_files = glob.glob('models/*.lkml')
+    
+    # Add additional view file patterns to search for views in non-standard directories
+    view_files += glob.glob('**/*.view.lkml', recursive=True)  # All view files in any subdirectory
+    
+    # Add all .lkml files in root directory as potential model files
+    root_lkml_files = glob.glob('*.lkml')
+    
+    # Filter out files that are already in the view_files list
+    for file in root_lkml_files:
+        if file not in model_files and '.view.lkml' not in file:
+            model_files.append(file)
+    
+    # Remove duplicates
+    view_files = list(set(view_files))
+    model_files = list(set(model_files))
+    
+    print(f"Found {len(view_files)} view files and {len(model_files)} model files")
     
     view_list = {}
     view_to_file = {}  # Record the file path for each view

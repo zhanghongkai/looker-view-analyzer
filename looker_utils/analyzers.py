@@ -7,6 +7,7 @@ from looker_utils.utils import auto_detect_related_tables, DEFAULT_PROJECT, DEFA
 
 # Analyze relationships between explores and views
 def analyze_explores():
+    print("Analyzing all explores from models and included files...")
     explore_to_views = defaultdict(set)
     explore_to_model = {}  # Record which model each explore belongs to
     unnest_views = set()  # Used to record views created through unnest
@@ -23,6 +24,11 @@ def analyze_explores():
     
     # First get all view files and check for table references
     view_files = glob.glob('views/**/*.view.lkml', recursive=True)
+    # Also include views from any other directory
+    view_files += glob.glob('**/*.view.lkml', recursive=True)
+    # Remove duplicates
+    view_files = list(set(view_files))
+    
     for file_path in view_files:
         try:
             with open(file_path, 'r') as f:
@@ -49,28 +55,58 @@ def analyze_explores():
     
     # Find all LookML files
     model_files = glob.glob('models/*.lkml')
+    # Also include models from root directory
+    model_files += glob.glob('*.model.lkml')
+    # Include any file containing "model" in its name
+    model_files += glob.glob('*model*.lkml')
+    # Remove duplicates
+    model_files = list(set(model_files))
+    
+    print(f"Found {len(model_files)} model files to analyze")
+    
     view_files = glob.glob('views/**/*.view.lkml', recursive=True)
+    # Also include views from other directories
+    view_files += glob.glob('**/*.view.lkml', recursive=True)
+    # Remove duplicates
+    view_files = list(set(view_files))
+    
     all_lkml_files = model_files + view_files
     
     for file_path in all_lkml_files:
         try:
-            model_name = os.path.basename(file_path).replace('.lkml', '') if 'models/' in file_path else None
-            
+            file_basename = os.path.basename(file_path)
+            # Extract model name, handling different naming conventions
+            model_name = None
+            if file_basename.endswith('.model.lkml'):
+                model_name = file_basename.replace('.model.lkml', '')
+            elif 'models/' in file_path and file_basename.endswith('.lkml'):
+                model_name = file_basename.replace('.lkml', '')
+                
             with open(file_path, 'r') as f:
                 content = f.read()
                 
-                if model_name:
+                if 'explore:' in content:
                     # Find all explore definitions
                     explore_matches = re.finditer(r'explore:\s+(\w+)\s+{', content)
                     for explore_match in explore_matches:
                         explore_name = explore_match.group(1)
                         start_pos = explore_match.end()
                         
+                        # Use model name from file if possible, otherwise use the directory name
+                        if not model_name and 'models/' in file_path:
+                            model_name = os.path.basename(os.path.dirname(file_path))
+                        elif not model_name:
+                            # Fallback for files outside models directory
+                            model_name = "unknown_model"
+                        
                         # Record explore information
                         explore_list[explore_name] = {
                             'model': model_name,
                             'file_path': file_path
                         }
+                        
+                        # Record which model this explore belongs to
+                        explore_to_model[explore_name] = model_name
                     
                         # Find the corresponding closing bracket
                         bracket_level = 1
@@ -84,6 +120,10 @@ def analyze_explores():
                                     end_pos = i
                                     break
                         
+                        if end_pos <= start_pos:
+                            print(f"Warning: Could not find end of explore block for {explore_name} in {file_path}")
+                            continue  # Skip if we can't find the closing bracket
+                            
                         explore_block = content[start_pos:end_pos]
                         
                         # The main view usually has the same name as the explore or is specified via from
@@ -97,11 +137,32 @@ def analyze_explores():
                         else:
                             explore_to_views[explore_name].add(explore_name)
                         
-                        # Find all top-level join statements
-                        join_matches = re.finditer(r'join:\s+(\w+)\s+{([^}]+)}', explore_block, re.DOTALL)
-                        for join_match in join_matches:
+                        # Find all join statements with different patterns
+                        # 1. Standard style: join: view_name { ... }
+                        standard_joins = re.finditer(r'join:\s+(\w+)\s+{', explore_block)
+                        for join_match in standard_joins:
                             join_view = join_match.group(1)
-                            join_block = join_match.group(2)
+                            join_start = join_match.end()
+                            
+                            # Find the end position of this join block
+                            bracket_level = 1
+                            join_end = join_start
+                            for i in range(join_start, len(explore_block)):
+                                if explore_block[i] == '{':
+                                    bracket_level += 1
+                                elif explore_block[i] == '}':
+                                    bracket_level -= 1
+                                    if bracket_level == 0:
+                                        join_end = i
+                                        break
+                            
+                            if join_end <= join_start:
+                                print(f"Warning: Could not find end of join block for {join_view} in explore {explore_name}")
+                                continue  # Skip if we can't find the closing bracket
+                                
+                            join_block = explore_block[join_start:join_end]
+                            
+                            # Add the join view to the explore's view list
                             explore_to_views[explore_name].add(join_view)
                             
                             # Look for "from:" statements in the join block, which indicates join_view is an alias view
@@ -116,42 +177,51 @@ def analyze_explores():
                             # Check if unnest operation is used
                             if re.search(r'sql:\s+.*unnest\(', join_block, re.IGNORECASE) and join_view not in non_unnest_views and join_view not in views_with_table_reference:
                                 unnest_views.add(join_view)
-                        
-                        # Look for nested join statements (joins inside join blocks)
-                        # Extract all join blocks, then search for join statements in each block
-                        nested_joins = re.finditer(r'join:\s+(\w+)\s+{', explore_block)
-                        for nested_join in nested_joins:
-                            nested_join_view = nested_join.group(1)
-                            nested_join_start = nested_join.end()
+                                print(f"DEBUG - Detected UNNEST view: {join_view}")
                             
-                            # Find the end position of the nested join block
-                            bracket_level = 1
-                            nested_end_pos = nested_join_start
-                            for i in range(nested_join_start, len(explore_block)):
-                                if i >= len(explore_block):
-                                    break
-                                if explore_block[i] == '{':
-                                    bracket_level += 1
-                                elif explore_block[i] == '}':
-                                    bracket_level -= 1
-                                    if bracket_level == 0:
-                                        nested_end_pos = i
-                                        break
-                            
-                            if nested_end_pos > nested_join_start:
-                                nested_join_block = explore_block[nested_join_start:nested_end_pos]
+                            # Look for nested join statements in the join block
+                            nested_joins = re.finditer(r'join:\s+(\w+)\s+{', join_block)
+                            for nested_join in nested_joins:
+                                nested_view = nested_join.group(1)
+                                explore_to_views[explore_name].add(nested_view)
                                 
-                                # Look for from statements in the nested join block
-                                nested_from_match = re.search(r'from:\s+(\w+)', nested_join_block)
+                                # Get the nested join block
+                                nested_start = nested_join.end()
+                                nested_bracket_level = 1
+                                nested_end = nested_start
+                                for i in range(nested_start, len(join_block)):
+                                    if join_block[i] == '{':
+                                        nested_bracket_level += 1
+                                    elif join_block[i] == '}':
+                                        nested_bracket_level -= 1
+                                        if nested_bracket_level == 0:
+                                            nested_end = i
+                                            break
+                                
+                                if nested_end <= nested_start:
+                                    continue  # Skip if we can't find the closing bracket
+                                    
+                                nested_block = join_block[nested_start:nested_end]
+                                
+                                # Look for "from:" statements in the nested join block
+                                nested_from_match = re.search(r'from:\s+(\w+)', nested_block)
                                 if nested_from_match:
                                     nested_from_view = nested_from_match.group(1)
-                                    if nested_join_view != nested_from_view:
+                                    if nested_view != nested_from_view:
                                         # Record alias relationship
-                                        view_from_alias[nested_join_view] = nested_from_view
-                                        print(f"DEBUG - Detected nested alias view: {nested_join_view} from {nested_from_view}")
+                                        view_from_alias[nested_view] = nested_from_view
+                                        print(f"DEBUG - Detected nested alias view: {nested_view} from {nested_from_view}")
+                                
+                                # Check if unnest operation is used
+                                if re.search(r'sql:\s+.*unnest\(', nested_block, re.IGNORECASE) and nested_view not in non_unnest_views and nested_view not in views_with_table_reference:
+                                    unnest_views.add(nested_view)
+                                    print(f"DEBUG - Detected nested UNNEST view: {nested_view}")
         except Exception as e:
             print(f"Error processing {file_path}: {e}")
     
+    print(f"Analyzed {len(explore_to_views)} explores across all models")
+    print(f"Identified {len(unnest_views)} views created through unnest")
+    print(f"Identified {len(view_from_alias)} alias view relationships")
     return explore_to_views, unnest_views, explore_list, explore_to_model, view_from_alias
 
 # Calculate the actual usage frequency for each view

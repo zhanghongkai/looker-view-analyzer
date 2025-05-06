@@ -56,6 +56,50 @@ python main.py --looker_path /path/to/looker/project \
                --snapshot_dataset custom_snapshot_dataset
 ```
 
+### Support for Non-Standard Directory Structures
+
+This tool has been enhanced to work with Looker projects that use non-standard directory structures. It can now detect and analyze:
+
+- Model files in the root directory (*.model.lkml)
+- View files in any subdirectory of the project
+- Views and explores defined in non-standard locations
+
+When you run the tool, it will automatically scan:
+1. Standard directories (`views/` and `models/`)
+2. The root directory for model files (*.model.lkml)
+3. All subdirectories for view files (*.view.lkml)
+
+This ensures that all views and explores are found, regardless of their location in the project structure. The tool will display information about the discovered files in non-standard locations to help you understand how your project is being analyzed.
+
+Example of directory structure analysis output:
+```
+Analyzing directory structure...
+Found 120 view files in standard 'views/' directory
+Found 5 model files in standard 'models/' directory
+Found 230 view files in non-standard locations
+Found 4 model files in root directory
+
+Non-standard model files found:
+  - FLIP_MONGO.model.lkml
+  - FlipPosts2.model.lkml
+  - Orders_TWO.model.lkml
+  - flipfit_users.model.lkml
+
+Sample non-standard view file locations:
+  - core_views/
+  - core_views/ads/
+  - core_views/brands/
+  - core_views/items/
+  - flip_views/
+  - jxin_views/
+  - jxin_views/brands/
+  - manual_upload/
+  - temp_views/
+  - ... and 15 more directories
+
+All files will be processed in the analysis.
+```
+
 ### Optional Features
 
 #### 1. Explore Usage Analysis (--explore_usage_file)
