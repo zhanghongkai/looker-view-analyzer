@@ -390,7 +390,8 @@ def update_view_table_info(view_list, actual_table_names, unnest_views, view_cit
                 info['table_name'] = f'{default_project}.{default_dataset}.{base_name}'
                 info['table_names'] = [info['table_name']]
                 
-                # Auto-detect variants
+                # Auto-detect variants - only call this when we've had to guess the table name
+                # This prevents overriding actual detected tables with default project variants
                 variants = auto_detect_related_tables(info['table_name'])
                 for variant in variants:
                     if variant not in info['table_names']:
@@ -398,6 +399,17 @@ def update_view_table_info(view_list, actual_table_names, unnest_views, view_cit
                         
                 if 'citation_type' not in info or info['citation_type'] not in ['derived_explore']:
                     info['citation_type'] = 'derived'
+        
+        # If we already have table names, make sure we're generating variants with the correct project prefix
+        elif info['table_names'] and 'citation_type' in info and info['citation_type'] == 'native':
+            original_tables = info['table_names'][:]
+            for original_table in original_tables:
+                # Only generate variants for complete three-part table names
+                if original_table.count('.') == 2:
+                    variants = auto_detect_related_tables(original_table)
+                    for variant in variants:
+                        if variant not in info['table_names']:
+                            info['table_names'].append(variant)
     
     return view_list 
 

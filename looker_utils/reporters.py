@@ -111,7 +111,8 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             # ----------------------------------------------------------
             # Clean up `additional_tables`:
             #   • Only keep valid table names in project.dataset.table format
-            #   • Auto-complete paths missing project, default to DEFAULT_PROJECT
+            #   • Auto-complete paths missing project ONLY if absolutely necessary
+            #   • Preserve original project prefix in table names
             #   • Remove duplicates and maintain stable order
             # ----------------------------------------------------------
             formatted_additional_tables = []
@@ -123,12 +124,47 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                     if not token:
                         continue
                     token = token.strip('`')  # Remove backticks
-                    # If starts with .dataset.table, add project prefix
-                    if token.startswith('.'):
-                        token = f"{DEFAULT_PROJECT}{token}"
-                    # Check if it matches x.y.z structure
-                    if re.match(r'^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$', token):
+                    
+                    # Parse the token to determine if it already has a project prefix
+                    parts = token.split('.')
+                    
+                    # If token already has a three-part structure (project.dataset.table), keep it as is
+                    if len(parts) == 3:
                         if token not in seen_tables:
+                            formatted_additional_tables.append(token)
+                            seen_tables.add(token)
+                    # If starts with .dataset.table, add project prefix from the main table
+                    elif token.startswith('.') and table_name and '.' in table_name:
+                        # Get project from main table_name
+                        table_parts = table_name.split('.')
+                        if len(table_parts) >= 3:
+                            main_project = table_parts[0]
+                            token = f"{main_project}{token}"
+                            if token not in seen_tables:
+                                formatted_additional_tables.append(token)
+                                seen_tables.add(token)
+                    # Only use DEFAULT_PROJECT as last resort for incomplete table references
+                    elif len(parts) == 2:  # dataset.table format
+                        # First try to extract project from main table
+                        if table_name and '.' in table_name:
+                            table_parts = table_name.split('.')
+                            if len(table_parts) >= 3:
+                                main_project = table_parts[0]
+                                token = f"{main_project}.{parts[0]}.{parts[1]}"
+                            else:
+                                # Only if we can't extract from main table, use DEFAULT_PROJECT
+                                token = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
+                        else:
+                            # Only if we don't have a main table, use DEFAULT_PROJECT
+                            token = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
+                        
+                        if token not in seen_tables:
+                            formatted_additional_tables.append(token)
+                            seen_tables.add(token)
+                    # Basic validation that we have a three-part structure after processing
+                    if '.' in token and token.count('.') == 2:
+                        # Final check to ensure it matches proper format
+                        if re.match(r'^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$', token) and token not in seen_tables:
                             formatted_additional_tables.append(token)
                             seen_tables.add(token)
             
@@ -272,23 +308,20 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
                     # Clean up all special characters and newlines in the table name
                     table_name = table_name.strip().replace('\n', '').replace('#', '').replace('\r', '')
                     
-                    # Handle cases where table_name is just the project name without dataset and table
-                    if table_name == actual_default_project or table_name == actual_snapshot_project:
-                        table_name = f"{actual_default_project}.{DEFAULT_DATASET}.{view_name}"
+                    # Parse the table name to extract its components
+                    parts = table_name.split('.')
                     
-                    # Ensure table name is in complete three-part format
-                    if table_name.startswith(actual_default_project) or table_name.startswith(actual_snapshot_project):
-                        parts = table_name.split('.')
-                        if len(parts) == 1:  # Only project part
-                            table_name = f"{actual_default_project}.{DEFAULT_DATASET}.{view_name}"
-                        elif len(parts) == 2:  # Missing table part
-                            table_name = f"{parts[0]}.{parts[1]}.{view_name}"
+                    # Handle cases where table_name is incomplete
+                    if len(parts) < 3:
+                        # Only add default project prefix if absolutely needed (incomplete reference)
+                        if len(parts) == 1:  # Only table name without project and dataset
+                            table_name = f"{actual_default_project}.{DEFAULT_DATASET}.{parts[0]}"
+                        elif len(parts) == 2:  # Dataset and table, but no project
+                            table_name = f"{actual_default_project}.{parts[0]}.{parts[1]}"
                     
-                    # Check if it's an actual table (contains actual_default_project or actual_snapshot_project) and hasn't been processed
-                    print(f"DEBUG - Checking table: {table_name}, contains actual_default_project: {actual_default_project in table_name}, contains actual_snapshot_project: {actual_snapshot_project in table_name}")
-                    
-                    # Relax the condition - accept all tables with valid three-part names (project.dataset.table)
-                    if ('.' in table_name) and (table_name not in processed_tables):
+                    # At this point, table_name should have a three-part structure
+                    # Check if it's a valid three-part name and hasn't been processed yet
+                    if ('.' in table_name) and (table_name.count('.') == 2) and (table_name not in processed_tables):
                         # Add table name to processed set
                         processed_tables.add(table_name)
                         

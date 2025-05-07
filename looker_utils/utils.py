@@ -30,19 +30,33 @@ def set_global_project_settings(default_project=None, default_dataset=None, snap
 def auto_detect_related_tables(base_table, is_debug=False):
     variants = []
     
-    # Check if there's a corresponding streaming table
-    streaming_table = f"{base_table}_streaming"
+    # Parse the base_table to extract its components
+    parts = base_table.split('.')
+    if len(parts) != 3:
+        # If the base_table doesn't have three parts, it's not a complete reference
+        # In this case, we shouldn't generate variants as we can't determine the correct prefix
+        if is_debug:
+            print(f"DEBUG - Cannot generate variants for incomplete table reference: {base_table}")
+        return variants
+    
+    # Extract the project, dataset, and table name from the base_table
+    project, dataset, table = parts
+    
+    # Generate streaming variant using the original project and dataset prefixes
+    streaming_table = f"{project}.{dataset}.{table}_streaming"
     variants.append(streaming_table)
     
-    # Check if there are corresponding partitioned tables (examples, can be adjusted according to actual naming rules)
-    partition_patterns = [
-        f"{base_table}_20\\d{{6}}",  # Daily partition (YYYYMMDD)
-        f"{base_table}_\\d{{4}}Q\\d",  # Quarterly partition (YYYYQ1)
-        f"{base_table}_\\d{{6}}",     # Monthly partition (YYYYMM)
-    ]
+    # Generate FLIP variant if applicable (for specified tables that have FLIP versions)
+    if "fact_purchased_line_items" in table:
+        flip_table = f"{project}.{dataset}.{table}_flip"
+        variants.append(flip_table)
+        
+        # Also add the FLIP streaming variant
+        flip_streaming_table = f"{project}.{dataset}.{table}_flip_streaming"
+        variants.append(flip_streaming_table)
     
-    # Here we don't actually query which partition tables exist, but return possible patterns
-    # In an actual application, you might need to access the BigQuery API to get all matching table names
+    # Don't add variants with different project prefixes unless specifically needed
+    # This is the key change to prevent adding "your-company" prefixed tables
     
     if is_debug:
         print(f"DEBUG - Variants generated for table {base_table}: {variants}")
@@ -89,13 +103,13 @@ def extract_tables_from_liquid_block(content, is_debug=False):
                 # Handle cases with and without backticks
                 table_ref = group.strip('`')
                 
-                # Complete the table name path
+                # Complete the table name path ONLY if it's incomplete
                 parts = table_ref.split('.')
-                if len(parts) == 3:  # project.dataset.table
+                if len(parts) == 3:  # project.dataset.table - already complete
                     full_table = table_ref
-                elif len(parts) == 2:  # dataset.table
+                elif len(parts) == 2:  # dataset.table - needs project
                     full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-                elif len(parts) == 1:  # table name only
+                elif len(parts) == 1:  # table name only - needs project and dataset
                     full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
                 else:
                     continue
@@ -113,13 +127,13 @@ def extract_tables_from_liquid_block(content, is_debug=False):
         if_tables = re.finditer(r'`([^`]+)`', if_part)
         for table_match in if_tables:
             table_ref = table_match.group(1)
-            # Complete the table name path
+            # Complete the table name path ONLY if it's incomplete
             parts = table_ref.split('.')
-            if len(parts) == 3:  # project.dataset.table
+            if len(parts) == 3:  # project.dataset.table - already complete
                 full_table = table_ref
-            elif len(parts) == 2:  # dataset.table
+            elif len(parts) == 2:  # dataset.table - needs project
                 full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-            elif len(parts) == 1:  # table name only
+            elif len(parts) == 1:  # table name only - needs project and dataset
                 full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
             else:
                 continue
@@ -131,13 +145,13 @@ def extract_tables_from_liquid_block(content, is_debug=False):
         else_tables = re.finditer(r'`([^`]+)`', else_part)
         for table_match in else_tables:
             table_ref = table_match.group(1)
-            # Complete the table name path
+            # Complete the table name path ONLY if it's incomplete
             parts = table_ref.split('.')
-            if len(parts) == 3:  # project.dataset.table
+            if len(parts) == 3:  # project.dataset.table - already complete
                 full_table = table_ref
-            elif len(parts) == 2:  # dataset.table
+            elif len(parts) == 2:  # dataset.table - needs project
                 full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-            elif len(parts) == 1:  # table name only
+            elif len(parts) == 1:  # table name only - needs project and dataset
                 full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
             else:
                 continue
@@ -198,11 +212,11 @@ def extract_tables_from_sql(sql, is_debug=False):
             else:
                 table_ref = match.group(1)
             
-            # Complete the table path
+            # Complete the table path ONLY if it's incomplete
             parts = table_ref.split('.')
-            if len(parts) == 3:  # project.dataset.table
+            if len(parts) == 3:  # project.dataset.table - already complete
                 full_table = table_ref
-            elif len(parts) == 2:  # dataset.table
+            elif len(parts) == 2:  # dataset.table - needs project
                 full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
             elif len(parts) == 1:  # table name only, assume in default dataset
                 full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
