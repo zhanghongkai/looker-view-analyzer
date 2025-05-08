@@ -137,6 +137,7 @@ These two features can be used independently or in combination for more comprehe
 
 - `--looker_path`: Path to the Looker project directory (required if the script is not in the Looker project directory)
 - `--explore_usage_file`: Path to the CSV file containing explore activity data (optional). If not provided, the `calculated_usage` field will be set to NULL in the output and the `export_command_active.txt` file will not be generated.
+- `--include_source_info`: Include additional columns in the `view_analysis.csv` output detailing the source of each view's reference (e.g., `sql_table_name` or the source explore for derived tables) (optional).
 - `--output_dir`: Directory where output files will be saved (default: current directory)
 - `--export_gs_bucket`: GCS bucket name for export commands (optional). If not provided, the script will analyze the views but will not generate export commands.
 - `--default_project`: Default BigQuery project name (default: 'your-company')

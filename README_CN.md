@@ -93,6 +93,7 @@ python main.py --looker_path /Looker项目路径 \
 
 - `--looker_path`：Looker 项目目录的路径（如果脚本不在 Looker 项目目录中，则必须提供）
 - `--explore_usage_file`：包含探索活动数据的 CSV 文件路径（可选）。如果未提供，输出中的`calculated_usage`字段将设置为NULL，且不会生成`export_command_active.txt`文件。
+- `--include_source_info`：在 `view_analysis.csv` 输出中包含额外的列，说明每个视图引用的源信息（例如，`sql_table_name` 或派生表定义的源探索）（可选）。
 - `--output_dir`：输出文件保存的目录（默认值：当前目录）
 - `--export_gs_bucket`：导出命令的 GCS 存储桶名称（可选）。如果未提供，脚本将分析视图但不会生成导出命令。
 - `--default_project`：默认 BigQuery 项目名称（默认值：'your-company'）
