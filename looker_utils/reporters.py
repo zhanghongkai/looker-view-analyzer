@@ -143,6 +143,12 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                             print(f"DEBUG - Skipping normalized duplicate: {raw_entry}")
                             continue
                         
+                        # MODIFICATION: Filter out tables where the last part starts with '_'
+                        table_actual_name = parts[-1]
+                        if table_actual_name.startswith('_'):
+                            print(f"DEBUG - Skipping table with leading underscore in last part: {raw_entry}")
+                            continue
+                        
                         formatted_additional_tables.append(raw_entry)
                         seen_tables.add(raw_entry)
                         normalized_seen.add(normalized)
@@ -167,7 +173,13 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                                     if normalized in normalized_seen:
                                         print(f"DEBUG - Skipping normalized duplicate token: {token}")
                                         continue
-                                        
+                                    
+                                    # MODIFICATION: Filter out tables where the last part starts with '_'
+                                    table_actual_name = parts[-1]
+                                    if table_actual_name.startswith('_'):
+                                        print(f"DEBUG - Skipping table token with leading underscore in last part: {token}")
+                                        continue
+
                                     formatted_additional_tables.append(token)
                                     seen_tables.add(token)
                                     normalized_seen.add(normalized)
