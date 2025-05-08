@@ -142,15 +142,15 @@ def main():
     view_list, view_to_file = extract_all_views()
     print(f"Extracted {len(view_list)} views")
     
-    print("分析探索关系并提取表信息...")
+    print("Analyzing explore relationships and extracting table information...")
     explore_to_views, unnest_views, explore_list, explore_to_model, view_from_alias, actual_table_names, view_citation_types, view_source_definitions = analyze_explores_and_extract_tables()
-    print(f"分析了 {len(explore_to_views)} 个探索")
-    print(f"识别了 {len(unnest_views)} 个通过unnest创建的视图")
-    print(f"识别了 {len(view_from_alias)} 个别名视图关系")
-    print(f"提取了 {len(actual_table_names)} 个视图的表名")
-    print(f"提取了 {len(view_source_definitions)} 个视图的数据来源定义")
+    print(f"Analyzed {len(explore_to_views)} explores")
+    print(f"Identified {len(unnest_views)} views created through unnest")
+    print(f"Identified {len(view_from_alias)} view alias relationships")
+    print(f"Extracted table names for {len(actual_table_names)} views")
+    print(f"Extracted data source definitions for {len(view_source_definitions)} views")
     total_tables = sum(len(tables) for tables in actual_table_names.values())
-    print(f"提取的表引用总数: {total_tables}")
+    print(f"Total table references extracted: {total_tables}")
     
     # Update table information in the view list
     view_list = update_view_table_info(

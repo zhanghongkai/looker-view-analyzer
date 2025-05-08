@@ -41,9 +41,9 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
     with open(output_file, 'w', newline='') as f:
         writer = csv.writer(f)
         
-        # 根据 include_source_info 参数决定标题行包含哪些列
+        # Decide which columns to include in the header based on include_source_info parameter
         header = ['view_name', 'explore_count', 'calculated_usage', 'table_name', 'citation_type', 'additional_tables']
-        # 只有当include_source_info为True时，才添加source_type和source_definition列
+        # Only add source_type and source_definition columns when include_source_info is True
         if include_source_info:
             header.extend(['source_type', 'source_definition'])
         writer.writerow(header)
@@ -52,40 +52,44 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             table_name = ""
             citation_type = "native"  # Default type
             additional_tables = []
-            source_type = ""  # 数据来源类型
-            source_definition = ""  # 数据来源定义
+            source_type = ""  # Data source type
+            source_definition = ""  # Data source definition
             
-            # Prioritize getting citation type from view_list
-            if view_name in view_list:
-                citation_type = view_list[view_name]['citation_type']
-                # Record the number of views of this type
-                citation_type_counts[citation_type] += 1
-                
-                # Get table name from view_list
-                if view_list[view_name]['table_names']:
-                    table_names = view_list[view_name]['table_names']
-                    if table_names:
-                        table_name = table_names[0]  # Main table name
-                        if len(table_names) > 1:
-                            additional_tables = table_names[1:]  # Additional table names
-                            
-                        # New: If citation_type is derived but actually has a table name, change it to native
-                        if citation_type == "derived" and table_name:
-                            citation_type = "native"
-                            print(f"DEBUG - Changed citation_type for {view_name} from 'derived' to 'native' because it has a table_name")
-                
-                # 获取视图数据来源定义
-                if include_source_info:
-                    source_type = view_list[view_name].get('source_type', '')
-                    source_definition = view_list[view_name].get('source_definition', '')
-            
-            # Only try to get from actual_table_names if there's no table name in view_list
-            elif view_name in actual_table_names and actual_table_names[view_name]:
+            # First, prioritize getting table references from actual_table_names, as it contains all tables extracted from Liquid blocks
+            if view_name in actual_table_names and actual_table_names[view_name]:
                 table_names = actual_table_names[view_name]
                 if table_names:
                     table_name = table_names[0]  # Main table name
                     if len(table_names) > 1:
                         additional_tables = table_names[1:]  # Additional table names
+                        print(f"DEBUG - View {view_name} extracted additional tables from actual_table_names: {additional_tables}")
+            
+            # Then, extract view information from view_list
+            if view_name in view_list:
+                citation_type = view_list[view_name]['citation_type']
+                # Record the number of views of this type
+                citation_type_counts[citation_type] += 1
+                
+                # If no table was found from actual_table_names, try getting it from view_list
+                if not table_name and view_list[view_name]['table_names']:
+                    table_names = view_list[view_name]['table_names']
+                    if table_names:
+                        table_name = table_names[0]  # Main table name
+                        if len(table_names) > 1:
+                            # If additional_tables already has content, don't overwrite it, merge instead
+                            new_additional = table_names[1:]
+                            additional_tables.extend([t for t in new_additional if t not in additional_tables])
+                            print(f"DEBUG - View {view_name} merged additional tables from view_list: {new_additional}")
+                
+                # New: If citation_type is derived but actually has a table name, change it to native
+                if citation_type == "derived" and table_name:
+                    citation_type = "native"
+                    print(f"DEBUG - Changed citation_type for {view_name} from 'derived' to 'native' because it has a table_name")
+                
+                # Get view data source definition
+                if include_source_info:
+                    source_type = view_list[view_name].get('source_type', '')
+                    source_definition = view_list[view_name].get('source_definition', '')
             
             # If it's an unnest view, ensure citation_type is correct
             if view_name in unnest_views:
@@ -96,6 +100,7 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                     additional_tables = []
             
             # Ensure table name is in complete three-part format (if not derived_explore type)
+            # Only attempt to complete when the table name starts with DEFAULT_PROJECT or SNAPSHOT_PROJECT
             if citation_type != 'derived_explore' and table_name and (table_name.startswith(DEFAULT_PROJECT) or table_name.startswith(SNAPSHOT_PROJECT)):
                 parts = table_name.split('.')
                 if len(parts) == 1:  # Only project part
@@ -110,70 +115,81 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             
             # ----------------------------------------------------------
             # Clean up `additional_tables`:
-            #   • Only keep valid table names in project.dataset.table format
-            #   • Auto-complete paths missing project ONLY if absolutely necessary
-            #   • Preserve original project prefix in table names
-            #   • Remove duplicates and maintain stable order
+            #   • Only keep valid complete three-part table names (project.dataset.table format)
+            #   • No longer attempt to auto-complete table name paths missing projects
+            #   • Remove duplicates and maintain stable sorting
             # ----------------------------------------------------------
             formatted_additional_tables = []
             seen_tables = set()
+            normalized_seen = set()  # For tracking normalized table names
+            
             for raw_entry in additional_tables:
-                # Split using semicolons, commas, spaces, parentheses as delimiters
-                tokens = re.split(r'[;\s,()]+', raw_entry)
-                for token in tokens:
-                    if not token:
-                        continue
-                    token = token.strip('`')  # Remove backticks
+                # Skip tables that have already been processed to avoid duplicates
+                if raw_entry in seen_tables:
+                    continue
+                
+                # If the table name is the same as the main table name, skip it
+                if raw_entry == table_name:
+                    continue
                     
-                    # Parse the token to determine if it already has a project prefix
-                    parts = token.split('.')
-                    
-                    # If token already has a three-part structure (project.dataset.table), keep it as is
-                    if len(parts) == 3:
-                        if token not in seen_tables:
-                            formatted_additional_tables.append(token)
-                            seen_tables.add(token)
-                    # If starts with .dataset.table, add project prefix from the main table
-                    elif token.startswith('.') and table_name and '.' in table_name:
-                        # Get project from main table_name
-                        table_parts = table_name.split('.')
-                        if len(table_parts) >= 3:
-                            main_project = table_parts[0]
-                            token = f"{main_project}{token}"
-                            if token not in seen_tables:
-                                formatted_additional_tables.append(token)
-                                seen_tables.add(token)
-                    # Only use DEFAULT_PROJECT as last resort for incomplete table references
-                    elif len(parts) == 2:  # dataset.table format
-                        # First try to extract project from main table
-                        if table_name and '.' in table_name:
-                            table_parts = table_name.split('.')
-                            if len(table_parts) >= 3:
-                                main_project = table_parts[0]
-                                token = f"{main_project}.{parts[0]}.{parts[1]}"
-                            else:
-                                # Only if we can't extract from main table, use DEFAULT_PROJECT
-                                token = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-                        else:
-                            # Only if we don't have a main table, use DEFAULT_PROJECT
-                            token = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
+                # Only process complete three-part table names (project.dataset.table format)
+                if isinstance(raw_entry, str) and raw_entry.count('.') == 2:
+                    parts = raw_entry.split('.')
+                    # Ensure all three parts have values and don't start with . (incomplete reference)
+                    if len(parts) == 3 and all(parts) and not raw_entry.startswith('.'):
+                        # Check if it's a normalized duplicate table name
+                        normalized = raw_entry.lower()
+                        if normalized in normalized_seen:
+                            print(f"DEBUG - Skipping normalized duplicate: {raw_entry}")
+                            continue
                         
-                        if token not in seen_tables:
-                            formatted_additional_tables.append(token)
-                            seen_tables.add(token)
-                    # Basic validation that we have a three-part structure after processing
-                    if '.' in token and token.count('.') == 2:
-                        # Final check to ensure it matches proper format
-                        if re.match(r'^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$', token) and token not in seen_tables:
-                            formatted_additional_tables.append(token)
-                            seen_tables.add(token)
+                        formatted_additional_tables.append(raw_entry)
+                        seen_tables.add(raw_entry)
+                        normalized_seen.add(normalized)
+                        continue
+                else:
+                    # If it's not a three-part table name, process complex strings that may contain multiple table references
+                    tokens = re.split(r'[;\s,()]+', str(raw_entry))
+                    for token in tokens:
+                        if not token:
+                            continue
+                        token = token.strip('`')  # Remove backticks
+                        
+                        # Only process complete three-part table names
+                        if '.' in token and token.count('.') == 2 and not token.startswith('.'):
+                            parts = token.split('.')
+                            # Verify all three parts have values
+                            if len(parts) == 3 and all(parts):
+                                # Check if it's a duplicate table name
+                                if token not in seen_tables and token != table_name:
+                                    # Check if it's a normalized duplicate
+                                    normalized = token.lower()
+                                    if normalized in normalized_seen:
+                                        print(f"DEBUG - Skipping normalized duplicate token: {token}")
+                                        continue
+                                        
+                                    formatted_additional_tables.append(token)
+                                    seen_tables.add(token)
+                                    normalized_seen.add(normalized)
+            
+            # Print debug information
+            if formatted_additional_tables:
+                print(f"DEBUG - View {view_name} final additional tables: {formatted_additional_tables}")
+            else:
+                print(f"DEBUG - View {view_name} has no valid additional table references")
             
             # Special handling for any view that still has no table name
             if not table_name and view_name in view_list and 'table_names' in view_list[view_name]:
                 print(f"DEBUG - Using table names from view_list for {view_name}: {view_list[view_name]['table_names']}")
                 if view_list[view_name]['table_names']:
                     table_name = view_list[view_name]['table_names'][0]
-                    additional_tables = view_list[view_name]['table_names'][1:] if len(view_list[view_name]['table_names']) > 1 else []
+                    # If additional_tables already has content, don't overwrite it, merge instead
+                    if len(view_list[view_name]['table_names']) > 1:
+                        new_additional = [t for t in view_list[view_name]['table_names'][1:] if t != table_name]
+                        for t in new_additional:
+                            if t not in seen_tables:
+                                formatted_additional_tables.append(t)
+                                seen_tables.add(t)
             
             # Log citation type for debugging
             print(f"DEBUG - Citation type for {view_name}: {citation_type}")
@@ -184,7 +200,7 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
             # Get explore count for this view
             explore_count = view_to_explore_count.get(view_name, 0)
             
-            # 准备基本行数据
+            # Prepare basic row data
             row_data = [
                 view_name, 
                 explore_count,
@@ -194,11 +210,11 @@ def generate_report(view_list, actual_usage, unnest_views, actual_table_names, o
                 ';'.join(formatted_additional_tables) if formatted_additional_tables else ''
             ]
             
-            # 根据 include_source_info 参数决定是否添加源信息列
+            # Decide whether to add source information columns based on include_source_info parameter
             if include_source_info:
                 row_data.extend([source_type, source_definition])
                 
-            # 写入CSV行
+            # Write CSV row
             writer.writerow(row_data)
     
     # Only output the top 20 most frequently used views when usage data is available
@@ -313,11 +329,13 @@ def generate_export_commands(sorted_views, view_list, unnest_views, actual_table
                     
                     # Handle cases where table_name is incomplete
                     if len(parts) < 3:
-                        # Only add default project prefix if absolutely needed (incomplete reference)
+                        # Only process one-part table names (just table name without project, dataset)
+                        # Skip two-part table names (like FLIP_SYSTEM.PUBLIC)
                         if len(parts) == 1:  # Only table name without project and dataset
                             table_name = f"{actual_default_project}.{DEFAULT_DATASET}.{parts[0]}"
-                        elif len(parts) == 2:  # Dataset and table, but no project
-                            table_name = f"{actual_default_project}.{parts[0]}.{parts[1]}"
+                        # No longer adding prefix to two-part table names
+                        # elif len(parts) == 2:  # Dataset and table, but no project
+                        #     table_name = f"{actual_default_project}.{parts[0]}.{parts[1]}"
                     
                     # At this point, table_name should have a three-part structure
                     # Check if it's a valid three-part name and hasn't been processed yet

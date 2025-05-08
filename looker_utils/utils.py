@@ -26,43 +26,6 @@ def set_global_project_settings(default_project=None, default_dataset=None, snap
     print(f"  SNAPSHOT_PROJECT: {SNAPSHOT_PROJECT}")
     print(f"  SNAPSHOT_DATASET: {SNAPSHOT_DATASET}")
 
-# Automatically detect related tables (streaming tables, partitioned tables, etc.)
-def auto_detect_related_tables(base_table, is_debug=False):
-    variants = []
-    
-    # Parse the base_table to extract its components
-    parts = base_table.split('.')
-    if len(parts) != 3:
-        # If the base_table doesn't have three parts, it's not a complete reference
-        # In this case, we shouldn't generate variants as we can't determine the correct prefix
-        if is_debug:
-            print(f"DEBUG - Cannot generate variants for incomplete table reference: {base_table}")
-        return variants
-    
-    # Extract the project, dataset, and table name from the base_table
-    project, dataset, table = parts
-    
-    # Generate streaming variant using the original project and dataset prefixes
-    streaming_table = f"{project}.{dataset}.{table}_streaming"
-    variants.append(streaming_table)
-    
-    # Generate FLIP variant if applicable (for specified tables that have FLIP versions)
-    if "fact_purchased_line_items" in table:
-        flip_table = f"{project}.{dataset}.{table}_flip"
-        variants.append(flip_table)
-        
-        # Also add the FLIP streaming variant
-        flip_streaming_table = f"{project}.{dataset}.{table}_flip_streaming"
-        variants.append(flip_streaming_table)
-    
-    # Don't add variants with different project prefixes unless specifically needed
-    # This is the key change to prevent adding "your-company" prefixed tables
-    
-    if is_debug:
-        print(f"DEBUG - Variants generated for table {base_table}: {variants}")
-    
-    return variants
-
 # Detect and process Liquid conditional blocks
 def extract_tables_from_liquid_block(content, is_debug=False):
     tables = []
@@ -70,97 +33,65 @@ def extract_tables_from_liquid_block(content, is_debug=False):
     # Remove double quotes to normalize table reference formats
     content = content.replace('"', '')
     
-    # Extract table references from Liquid conditional blocks
-    liquid_patterns = [
-        # Table references in if-else blocks, using backticks
-        r'{%\s*if\s+.*?%}.*?`([^`]+)`.*?{%\s*else\s*%}.*?`([^`]+)`.*?{%\s*endif\s*%}',
-        # Table references in if blocks only, using backticks
-        r'{%\s*if\s+.*?%}.*?`([^`]+)`.*?{%\s*endif\s*%}',
-        # Table references in if blocks, without backticks, but with full path (project.dataset.table)
-        r'{%\s*if\s+.*?%}.*?FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+).*?{%\s*endif\s*%}',
-        # Table references in if blocks, without backticks, but with partial path (dataset.table)
-        r'{%\s*if\s+.*?%}.*?FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+).*?{%\s*endif\s*%}',
-        # JOIN statements in if blocks, full path
-        r'{%\s*if\s+.*?%}.*?JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+).*?{%\s*endif\s*%}',
-        # JOIN statements in if blocks, partial path
-        r'{%\s*if\s+.*?%}.*?JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+).*?{%\s*endif\s*%}',
-        # Table reference patterns in if-else-endif blocks
-        r'{%\s*if\s+([^%]+)%}\s*`([^`]+)`\s*{%\s*else\s*%}\s*`([^`]+)`\s*{%\s*endif\s*%}',
-    ]
+    if is_debug:
+        print(f"DEBUG - Processing Liquid conditional block: input content length={len(content)}")
     
-    for pattern in liquid_patterns:
-        matches = re.finditer(pattern, content, re.DOTALL)
-        for match in matches:
-            groups = match.groups()
-            for group in groups:
-                if not group:
-                    continue
-                
-                # Skip condition text that isn't a table name
-                if '_filters' in group or '==' in group or "'" in group:
-                    continue
-                
-                # Handle cases with and without backticks
-                table_ref = group.strip('`')
-                
-                # Complete the table name path ONLY if it's incomplete
-                parts = table_ref.split('.')
-                if len(parts) == 3:  # project.dataset.table - already complete
-                    full_table = table_ref
-                elif len(parts) == 2:  # dataset.table - needs project
-                    full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-                elif len(parts) == 1:  # table name only - needs project and dataset
-                    full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
-                else:
-                    continue
-                
-                if full_table not in tables:
-                    tables.append(full_table)
+    # Simpler approach: extract all table references from Liquid blocks, regardless of conditions
+    # First match all table references in Liquid blocks (including nested ones)
+    liquid_blocks = []
+    # Match {% if ... %} ... {% elsif ... %} ... {% else %} ... {% endif %} format blocks
+    if_blocks = re.finditer(r'{%\s*if[^%]*%}(.*?){%\s*endif\s*%}', content, re.DOTALL)
+    for block in if_blocks:
+        liquid_blocks.append(block.group(0))
     
-    # Special detection for complete if-else structures
-    if_else_blocks = re.finditer(r'{%\s*if\s+[^%]+%}([^{]+){%\s*else\s*%}([^{]+){%\s*endif\s*%}', content, re.DOTALL)
-    for block in if_else_blocks:
-        if_part = block.group(1)
-        else_part = block.group(2)
+    # If no complete conditional blocks found, try matching incomplete blocks (e.g. truncated ones)
+    if not liquid_blocks:
+        partial_blocks = re.finditer(r'{%\s*if[^}]+}([^{]+)', content, re.DOTALL)
+        for block in partial_blocks:
+            liquid_blocks.append(block.group(0))
+    
+    if is_debug:
+        print(f"DEBUG - Found {len(liquid_blocks)} Liquid conditional blocks")
+    
+    # For each Liquid block, extract all possible table references
+    for block in liquid_blocks:
+        # 1. Complete table references with backticks: `project.dataset.table`
+        backtick_refs = re.finditer(r'`([^`]+\.[^`]+\.[^`]+)`', block)
+        for match in backtick_refs:
+            table_ref = match.group(1)
+            if table_ref not in tables:
+                tables.append(table_ref)
         
-        # Extract table references from the if part
-        if_tables = re.finditer(r'`([^`]+)`', if_part)
-        for table_match in if_tables:
-            table_ref = table_match.group(1)
-            # Complete the table name path ONLY if it's incomplete
-            parts = table_ref.split('.')
-            if len(parts) == 3:  # project.dataset.table - already complete
-                full_table = table_ref
-            elif len(parts) == 2:  # dataset.table - needs project
-                full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-            elif len(parts) == 1:  # table name only - needs project and dataset
-                full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
-            else:
-                continue
-            
-            if full_table not in tables:
-                tables.append(full_table)
+        # 2. Partial table references: `dataset.table` - no longer adding default project prefix
+        partial_refs = re.finditer(r'`([^`]+\.[^`]+)`', block)
+        for match in partial_refs:
+            table_ref = match.group(1)
+            # Keep two-part table names directly, without adding default project prefix
+            if table_ref not in tables:
+                tables.append(table_ref)
+                if is_debug:
+                    print(f"DEBUG - Keeping two-part table name: {table_ref}")
         
-        # Extract table references from the else part
-        else_tables = re.finditer(r'`([^`]+)`', else_part)
-        for table_match in else_tables:
-            table_ref = table_match.group(1)
-            # Complete the table name path ONLY if it's incomplete
-            parts = table_ref.split('.')
-            if len(parts) == 3:  # project.dataset.table - already complete
-                full_table = table_ref
-            elif len(parts) == 2:  # dataset.table - needs project
-                full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-            elif len(parts) == 1:  # table name only - needs project and dataset
-                full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
-            else:
-                continue
-            
-            if full_table not in tables:
-                tables.append(full_table)
+        # 3. Direct FROM and JOIN statements: FROM project.dataset.table or JOIN project.dataset.table
+        sql_patterns = [
+            r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)', 
+            r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)',
+            r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)', 
+            r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)'
+        ]
+        
+        for pattern in sql_patterns:
+            refs = re.finditer(pattern, block)
+            for match in refs:
+                table_ref = match.group(1)
+                # Keep original table references, without adding default project prefix
+                if table_ref not in tables:
+                    tables.append(table_ref)
+                    if is_debug:
+                        print(f"DEBUG - Keeping original table reference: {table_ref}")
     
-    if is_debug and tables:
-        print(f"DEBUG - Tables extracted from Liquid blocks: {tables}")
+    if is_debug:
+        print(f"DEBUG - Tables extracted from Liquid conditional blocks: {tables}")
     
     return tables
 
@@ -184,20 +115,36 @@ def extract_tables_from_sql(sql, is_debug=False):
         # Standard reference patterns for project.dataset.table or dataset.table
         r'`([^`]+\.[^`]+\.[^`]+)`',  # `project.dataset.table`
         r'`([^`]+\.[^`]+)`',  # `dataset.table`
-        r'FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # FROM project.dataset.table
-        r'FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # FROM dataset.table
-        r'JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # JOIN project.dataset.table
-        r'JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # JOIN dataset.table
-        r'FROM\s+`([^`]+)`',  # FROM `table_reference`
-        r'JOIN\s+`([^`]+)`',  # JOIN `table_reference`
         
-        # UNNEST patterns
-        r'UNNEST\(\(SELECT .*? FROM\s+`?([^`\s)]+\.[^`\s)]+\.[^`\s)]+)`?\s*',  # UNNEST((SELECT ... FROM project.dataset.table)
-        r'UNNEST\(\(SELECT .*? FROM\s+`?([^`\s)]+\.[^`\s)]+)`?\s*',  # UNNEST((SELECT ... FROM dataset.table)
+        # Handle FROM clauses with table aliases - add (?i) to make matching case-insensitive
+        r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+[A-Za-z][A-Za-z0-9_]*',  # FROM project.dataset.table A
+        r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+[A-Za-z][A-Za-z0-9_]*',  # FROM dataset.table A
         
-        # Table references in WITH statement subqueries
-        r'WITH\s+\w+\s+AS\s*\(.*?FROM\s+`?([^`\s)]+\.[^`\s)]+\.[^`\s)]+)`?',
-        r'WITH\s+\w+\s+AS\s*\(.*?FROM\s+`?([^`\s)]+\.[^`\s)]+)`?'
+        # Handle JOIN clauses with table aliases - add (?i) to make matching case-insensitive
+        r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+[A-Za-z][A-Za-z0-9_]*',  # JOIN project.dataset.table B
+        r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+[A-Za-z][A-Za-z0-9_]*',  # JOIN dataset.table B
+        
+        # Original patterns (without aliases) - add (?i) to make matching case-insensitive
+        r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # FROM project.dataset.table
+        r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # FROM dataset.table
+        r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # JOIN project.dataset.table
+        r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)(?!\s*AS|\s*\w)',  # JOIN dataset.table
+        r'(?i)FROM\s+`([^`]+)`',  # FROM `table_reference`
+        r'(?i)JOIN\s+`([^`]+)`',  # JOIN `table_reference`
+        
+        # Handle aliases with AS - add (?i) to make matching case-insensitive
+        r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+AS\s+[A-Za-z][A-Za-z0-9_]*',  # FROM project.dataset.table AS A
+        r'(?i)FROM\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+AS\s+[A-Za-z][A-Za-z0-9_]*',  # FROM dataset.table AS A
+        r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+AS\s+[A-Za-z][A-Za-z0-9_]*',  # JOIN project.dataset.table AS B
+        r'(?i)JOIN\s+([a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\s+AS\s+[A-Za-z][A-Za-z0-9_]*',  # JOIN dataset.table AS B
+        
+        # UNNEST patterns - add (?i) to make matching case-insensitive
+        r'(?i)UNNEST\(\(SELECT .*? FROM\s+`?([^`\s)]+\.[^`\s)]+\.[^`\s)]+)`?\s*',  # UNNEST((SELECT ... FROM project.dataset.table)
+        r'(?i)UNNEST\(\(SELECT .*? FROM\s+`?([^`\s)]+\.[^`\s)]+)`?\s*',  # UNNEST((SELECT ... FROM dataset.table)
+        
+        # Table references in WITH statement subqueries - add (?i) to make matching case-insensitive
+        r'(?i)WITH\s+\w+\s+AS\s*\(.*?FROM\s+`?([^`\s)]+\.[^`\s)]+\.[^`\s)]+)`?',
+        r'(?i)WITH\s+\w+\s+AS\s*\(.*?FROM\s+`?([^`\s)]+\.[^`\s)]+)`?'
     ]
     
     tables = []
@@ -212,26 +159,20 @@ def extract_tables_from_sql(sql, is_debug=False):
             else:
                 table_ref = match.group(1)
             
-            # Complete the table path ONLY if it's incomplete
-            parts = table_ref.split('.')
-            if len(parts) == 3:  # project.dataset.table - already complete
-                full_table = table_ref
-            elif len(parts) == 2:  # dataset.table - needs project
-                full_table = f"{DEFAULT_PROJECT}.{parts[0]}.{parts[1]}"
-            elif len(parts) == 1:  # table name only, assume in default dataset
-                full_table = f"{DEFAULT_PROJECT}.{DEFAULT_DATASET}.{parts[0]}"
-            else:
-                continue  # Not a valid format
+            # No longer adding default project prefix for incomplete table paths, use original references directly
+            # For three-part table names (complete names), keep unchanged
+            # For two-part or one-part table names, keep as is, without adding prefix
+            if table_ref not in tables:
+                tables.append(table_ref)
+                if is_debug:
+                    print(f"DEBUG - Keeping original table reference: {table_ref}")
             
-            # Handle special cases
-            if "'" in full_table or '"' in full_table:
-                continue  # Skip table names containing quotes, might be false positives
-            
-            if 'TABLE_DATE_RANGE' in full_table or '$' in full_table:
-                continue  # Skip cases with variable references
-            
-            if full_table not in tables:
-                tables.append(full_table)
+            # Original auto-completion code has been removed
+    
+    # New debug output
+    if is_debug:
+        print(f"DEBUG - Extract SQL table names: input SQL={sql}")
+        print(f"DEBUG - Extract SQL table names: extraction result={tables}")
     
     # Handle streaming table suffixes (_streaming) and partitioned tables (_20220101 format)
     base_tables = []

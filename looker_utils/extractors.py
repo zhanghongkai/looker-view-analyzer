@@ -6,8 +6,7 @@ from collections import defaultdict
 from looker_utils.utils import (
     extract_tables_from_liquid_block,
     extract_tables_from_sql,
-    contains_explore_source,
-    auto_detect_related_tables
+    contains_explore_source
 )
 
 # Extract table names from a single view definition
@@ -122,16 +121,20 @@ def extract_tables_from_view_content(view_name, content):
             # Remove double quotes from SQL text for better table extraction
             sql_text_no_quotes = sql_text.replace('"', '')
             
-            # First check if there are Liquid conditional blocks
-            liquid_tables = extract_tables_from_liquid_block(sql_text_no_quotes, False)
+            # Improvement: First try to extract table names from all possible Liquid conditional blocks, regardless of conditions
+            # This ensures capturing all possible table dependencies
+            liquid_tables = extract_tables_from_liquid_block(sql_text_no_quotes, True)
             if liquid_tables:
+                print(f"DEBUG - Tables extracted from Liquid blocks in view {view_name}: {liquid_tables}")
                 tables.extend(liquid_tables)
             
-            # Then use more general SQL parsing to extract table names
-            extracted_tables = extract_tables_from_sql(sql_text_no_quotes)
-            for table in extracted_tables:
-                if table not in tables:
-                    tables.append(table)
+            # Then use regular SQL parsing to extract the remaining table names
+            extracted_tables = extract_tables_from_sql(sql_text_no_quotes, True)
+            if extracted_tables:
+                print(f"DEBUG - Tables extracted from SQL in view {view_name}: {extracted_tables}")
+                for table in extracted_tables:
+                    if table not in tables:
+                        tables.append(table)
         
         # If no SQL definition is found, search for table references directly in the entire derived_block
         else:
@@ -149,11 +152,13 @@ def extract_tables_from_view_content(view_name, content):
                 if table_name not in tables:
                     tables.append(table_name)
             
-            # Check table references in Liquid conditional blocks
-            liquid_tables = extract_tables_from_liquid_block(derived_block_no_quotes, False)
-            for table in liquid_tables:
-                if table not in tables:
-                    tables.append(table)
+            # Try to extract table references from Liquid blocks
+            liquid_tables = extract_tables_from_liquid_block(derived_block_no_quotes, True)
+            if liquid_tables:
+                print(f"DEBUG - Tables extracted from Liquid blocks in derived table block for view {view_name}: {liquid_tables}")
+                for table in liquid_tables:
+                    if table not in tables:
+                        tables.append(table)
     
     # Improvement: If multiple table references are found, try to select the most relevant one as the main table
     if len(tables) > 0:
@@ -219,6 +224,12 @@ def extract_tables_from_view_content(view_name, content):
                 # Move the table with shortest name to the front
                 tables.remove(shortest_table)
                 tables.insert(0, shortest_table)
+    
+    # Summary of analysis results
+    if tables:
+        print(f"DEBUG - View {view_name} analysis results: Found {len(tables)} table references: {tables}")
+    else:
+        print(f"DEBUG - View {view_name} analysis results: No table references found")
     
     # New: If derived_table is used but actually references a real table, set citation_type to 'native'
     if derived_block and tables:

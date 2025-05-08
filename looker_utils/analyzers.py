@@ -4,7 +4,6 @@ import os
 import glob
 from collections import defaultdict
 from looker_utils.utils import (
-    auto_detect_related_tables, 
     DEFAULT_PROJECT, 
     DEFAULT_DATASET, 
     SNAPSHOT_PROJECT, 
@@ -184,7 +183,7 @@ def analyze_explores():
                                     print(f"DEBUG - Detected alias view: {join_view} from {from_view}")
                             
                             # Check if unnest operation is used
-                            if re.search(r'sql:\s+.*unnest\(', join_block, re.IGNORECASE) and join_view not in non_unnest_views and join_view not in views_with_table_reference:
+                            if re.search(r'(?i)sql:\s+.*unnest\(', join_block) and join_view not in non_unnest_views and join_view not in views_with_table_reference:
                                 unnest_views.add(join_view)
                                 print(f"DEBUG - Detected UNNEST view: {join_view}")
                             
@@ -222,7 +221,7 @@ def analyze_explores():
                                         print(f"DEBUG - Detected nested alias view: {nested_view} from {nested_from_view}")
                                 
                                 # Check if unnest operation is used
-                                if re.search(r'sql:\s+.*unnest\(', nested_block, re.IGNORECASE) and nested_view not in non_unnest_views and nested_view not in views_with_table_reference:
+                                if re.search(r'(?i)sql:\s+.*unnest\(', nested_block) and nested_view not in non_unnest_views and nested_view not in views_with_table_reference:
                                     unnest_views.add(nested_view)
                                     print(f"DEBUG - Detected nested UNNEST view: {nested_view}")
         except Exception as e:
@@ -303,7 +302,7 @@ def update_view_table_info(view_list, actual_table_names, unnest_views, view_cit
     for alias_view, base_view in view_from_alias.items():
         print(f"DEBUG - Alias view: {alias_view} -> {base_view}")
     
-    # 添加数据来源定义到视图信息中
+    # Add data source definitions to view information
     for view_name, source_def in view_source_definitions.items():
         if view_name in view_list:
             view_list[view_name]['source_type'] = source_def['type']
@@ -328,13 +327,32 @@ def update_view_table_info(view_list, actual_table_names, unnest_views, view_cit
                 view_list[alias_view]['table_names'] = []
                 print(f"DEBUG - Updated alias view: {alias_view} citation_type to derived_from, based on {base_view}, but base view has no table names")
     
-    # Update table locations with actual table names extracted from view definitions
+    # Process actual table names - now filters out two-part table names (like FLIP_SYSTEM.PUBLIC) without adding default project prefix
     for view_name, table_names in actual_table_names.items():
         if view_name in view_list and table_names and view_name not in view_from_alias:
             print(f"DEBUG - Updating {view_name} in view_list: {table_names}")
             
-            view_list[view_name]['table_name'] = table_names[0] if table_names else ""
-            view_list[view_name]['table_names'] = table_names[:]
+            # Filter out two-part table names, don't add default project prefix
+            filtered_table_names = []
+            for table_name in table_names:
+                # Count the dots to determine if it's a two-part table name
+                dots_count = table_name.count('.')
+                
+                # If it's a two-part table name, skip adding to the filtered table names list
+                if dots_count == 1:  # E.g., FLIP_SYSTEM.PUBLIC
+                    print(f"DEBUG - Skipping two-part table name: {table_name}")
+                    continue
+                
+                filtered_table_names.append(table_name)
+            
+            # Update view information with the filtered table names list
+            if filtered_table_names:
+                view_list[view_name]['table_name'] = filtered_table_names[0] if filtered_table_names else ""
+                view_list[view_name]['table_names'] = filtered_table_names[:]
+            else:
+                # If there are no table names after filtering, clear table name information
+                view_list[view_name]['table_name'] = ""
+                view_list[view_name]['table_names'] = []
             
             # Set citation type, preferring already identified type
             if view_name in view_citation_types:
@@ -390,80 +408,153 @@ def update_view_table_info(view_list, actual_table_names, unnest_views, view_cit
                 info['table_name'] = f'{default_project}.{default_dataset}.{base_name}'
                 info['table_names'] = [info['table_name']]
                 
-                # Auto-detect variants - only call this when we've had to guess the table name
-                # This prevents overriding actual detected tables with default project variants
-                variants = auto_detect_related_tables(info['table_name'])
-                for variant in variants:
-                    if variant not in info['table_names']:
-                        info['table_names'].append(variant)
-                        
                 if 'citation_type' not in info or info['citation_type'] not in ['derived_explore']:
                     info['citation_type'] = 'derived'
         
-        # If we already have table names, make sure we're generating variants with the correct project prefix
-        elif info['table_names'] and 'citation_type' in info and info['citation_type'] == 'native':
-            original_tables = info['table_names'][:]
-            for original_table in original_tables:
-                # Only generate variants for complete three-part table names
-                if original_table.count('.') == 2:
-                    variants = auto_detect_related_tables(original_table)
-                    for variant in variants:
-                        if variant not in info['table_names']:
-                            info['table_names'].append(variant)
-    
+        # If we already have table names, don't add any variants
+        
     return view_list 
 
-# 新添加的函数，整合了关系分析和表信息提取
+# Newly added function that integrates relationship analysis and table information extraction
 def analyze_explores_and_extract_tables():
-    print("分析探索与视图关系并提取表信息...")
+    print("Analyzing explore-view relationships and extracting table information...")
     
-    # 第一步：关系分析
+    # Step 1: Relationship analysis
     explore_to_views, unnest_views, explore_list, explore_to_model, view_from_alias = analyze_explores()
-    print(f"分析了 {len(explore_to_views)} 个探索")
-    print(f"识别了 {len(unnest_views)} 个通过unnest创建的视图")
-    print(f"识别了 {len(view_from_alias)} 个别名视图关系")
+    print(f"Analyzed {len(explore_to_views)} explores")
+    print(f"Identified {len(unnest_views)} views created through unnest")
+    print(f"Identified {len(view_from_alias)} alias view relationships")
     
-    # 第二步：提取视图数据来源定义（用于调试）
+    # Step 2: Extract view data source definitions (for debugging)
     view_source_definitions = extract_view_source_definitions()
-    print(f"提取了 {len(view_source_definitions)} 个视图的数据来源定义")
+    print(f"Extracted data source definitions for {len(view_source_definitions)} views")
     
-    # 第三步：从视图的数据来源定义中提取表信息
-    actual_table_names, view_citation_types = extract_tables_from_views()
-    print(f"从视图定义中提取了 {len(actual_table_names)} 个视图的表名")
+    # Step 3: Normalize source information definitions
+    normalized_view_source_definitions = normalize_source_definitions(view_source_definitions)
+    print(f"Normalized data source definitions for {len(normalized_view_source_definitions)} views")
+    
+    # Step 4: Extract table information from view data source definitions
+    actual_table_names, view_citation_types = extract_tables_from_views(normalized_view_source_definitions)
+    print(f"Extracted table names for {len(actual_table_names)} views from view definitions")
+    print(f"Total number of table references extracted: {sum(len(tables) for tables in actual_table_names.values())}")
     
     return explore_to_views, unnest_views, explore_list, explore_to_model, view_from_alias, actual_table_names, view_citation_types, view_source_definitions
 
-# 提取视图数据来源定义，用于调试
+# Normalize source information definitions, handling syntax differences between database dialects
+def normalize_source_definitions(view_source_definitions):
+    print("Normalizing view data source definitions...")
+    normalized_definitions = {}
+    
+    for view_name, source_info in view_source_definitions.items():
+        # Create a copy of the source information
+        normalized_info = source_info.copy()
+        
+        # If it's an SQL type definition, normalization is needed
+        if source_info['type'] in ['derived_table_sql', 'sql_table_name']:
+            # Remove all double quotes to standardize source definition format
+            normalized_definition = source_info['definition'].replace('"', '')
+            normalized_info['normalized_definition'] = normalized_definition
+        else:
+            # Non-SQL type definitions remain unchanged
+            normalized_info['normalized_definition'] = source_info['definition']
+        
+        normalized_definitions[view_name] = normalized_info
+    
+    return normalized_definitions
+
+# Extract view data source definitions for debugging
 def extract_view_source_definitions():
     view_source_definitions = {}
     
-    # 查找所有视图文件
+    # Find all view files
     view_files = glob.glob('views/**/*.view.lkml', recursive=True)
-    # 也在其他目录中查找视图文件
+    # Also look for view files in other directories
     view_files += glob.glob('**/*.view.lkml', recursive=True)
-    # 去除重复项
+    # Remove duplicates
     view_files = list(set(view_files))
     
-    print(f"DEBUG - 在所有目录中查找视图数据来源定义，找到 {len(view_files)} 个视图文件")
+    print(f"DEBUG - Searching for view data source definitions in all directories, found {len(view_files)} view files")
     
-    # 处理所有视图文件
+    # Special focus on fact_purchased_orders view
+    fact_purchased_orders_file = None
+    for file_path in view_files:
+        if 'fact_purchased_orders.view.lkml' in file_path:
+            fact_purchased_orders_file = file_path
+            print(f"DEBUG - Found fact_purchased_orders view file: {fact_purchased_orders_file}")
+            break
+    
+    # Priority processing for fact_purchased_orders view file
+    if fact_purchased_orders_file:
+        try:
+            print(f"DEBUG - Special processing for fact_purchased_orders view file")
+            with open(fact_purchased_orders_file, 'r') as f:
+                content = f.read()
+                # First try to extract the derived_table block
+                dt_match = re.search(r'derived_table\s*:\s*{', content)
+                if dt_match:
+                    dt_pos = dt_match.start()
+                    print(f"DEBUG - Found derived_table start position in fact_purchased_orders: {dt_pos}")
+                    
+                    # Extract the entire derived_table block, handling nested braces
+                    brace_start = content.find('{', dt_pos)
+                    if brace_start != -1:
+                        brace_level = 1
+                        i = brace_start + 1
+                        while i < len(content) and brace_level > 0:
+                            if content[i] == '{':
+                                brace_level += 1
+                            elif content[i] == '}':
+                                brace_level -= 1
+                            i += 1
+                        
+                        if brace_level == 0:
+                            derived_block = content[brace_start+1:i-1].strip()
+                            print(f"DEBUG - Successfully extracted derived_table block from fact_purchased_orders, length: {len(derived_block)}")
+                            
+                            # Extract SQL part - first find sql: marked content to ;;
+                            sql_pos = derived_block.find("sql:")
+                            if sql_pos != -1:
+                                sql_pos += 4  # Skip "sql:"
+                                end_pos = derived_block.find(";;", sql_pos)
+                                if end_pos != -1:
+                                    sql_text = derived_block[sql_pos:end_pos].strip()
+                                    # Store extracted SQL
+                                    view_source_definitions["fact_purchased_orders"] = {
+                                        'type': 'derived_table_sql',
+                                        'definition': sql_text
+                                    }
+                                    print(f"DEBUG - Successfully extracted SQL definition from fact_purchased_orders, length: {len(sql_text)}")
+        except Exception as e:
+            print(f"Special processing for fact_purchased_orders view file failed: {e}")
+    
+    # Process all view files
     for file_path in view_files:
         try:
             with open(file_path, 'r') as f:
                 content = f.read()
                 
-                # 提取所有视图名称
-                view_matches = re.finditer(r'view:\s+(\w+)\s+{', content)
+                # Preprocess content: split by line
+                content_lines = content.split('\n')
+                # Filter out comment lines (lines starting with #)
+                uncommented_content = '\n'.join([line for line in content_lines if not line.strip().startswith('#')])
+                
+                # Extract view names using preprocessed content
+                view_matches = re.finditer(r'view:\s+(\w+)\s+{', uncommented_content)
                 for view_match in view_matches:
                     view_name = view_match.group(1)
+                    
+                    # Skip if fact_purchased_orders has already been processed
+                    if view_name == "fact_purchased_orders" and "fact_purchased_orders" in view_source_definitions:
+                        continue
+                        
                     view_start_pos = view_match.start()
                     
-                    # 查找此视图定义的结束位置
+                    # Find the end position of this view definition (using uncommented_content)
                     bracket_level = 0
                     view_end_pos = None
                     in_view = False
                     
-                    for i, char in enumerate(content[view_start_pos:]):
+                    for i, char in enumerate(uncommented_content[view_start_pos:]):
                         if char == '{':
                             bracket_level += 1
                             in_view = True
@@ -474,12 +565,12 @@ def extract_view_source_definitions():
                                 break
                     
                     if view_end_pos is None:
-                        continue  # 无法确定视图的结束位置
+                        continue  # Cannot determine the end position of the view
                     
-                    # 提取当前视图的内容
-                    view_content = content[view_start_pos:view_end_pos]
+                    # Extract the content of the current view (using uncommented_content)
+                    view_content = uncommented_content[view_start_pos:view_end_pos]
                     
-                    # 提取sql_table_name定义
+                    # Extract sql_table_name definition (using uncommented_content)
                     sql_table_match = re.search(r'sql_table_name:\s+([^;]+);', view_content)
                     if sql_table_match:
                         view_source_definitions[view_name] = {
@@ -488,121 +579,181 @@ def extract_view_source_definitions():
                         }
                         continue
                     
-                    # 提取derived_table定义
-                    derived_block = None
-                    dt_pos = view_content.find('derived_table')
-                    if dt_pos != -1:
-                        brace_start = view_content.find('{', dt_pos)
-                        if brace_start != -1:
-                            brace_level = 1
-                            i = brace_start + 1
-                            while i < len(view_content) and brace_level > 0:
-                                if view_content[i] == '{':
-                                    brace_level += 1
-                                elif view_content[i] == '}':
-                                    brace_level -= 1
-                                i += 1
-                            if brace_level == 0:
-                                derived_block = view_content[brace_start + 1 : i - 1]
+                    # Extract derived_table definition - enhanced version
+                    derived_table_found = False
+                    
+                    # 1. First find the derived_table block
+                    dt_match = re.search(r'derived_table\s*:\s*{', view_content)
+                    if dt_match:
+                        dt_pos = dt_match.start()
+                        if dt_pos != -1:
+                            # 2. Extract the entire derived_table block, handling nested braces
+                            brace_start = view_content.find('{', dt_pos)
+                            if brace_start != -1:
+                                brace_level = 1
+                                i = brace_start + 1
+                                while i < len(view_content) and brace_level > 0:
+                                    if view_content[i] == '{':
+                                        brace_level += 1
+                                    elif view_content[i] == '}':
+                                        brace_level -= 1
+                                    i += 1
                                 
-                    if derived_block:
-                        # 检查是否有explore_source
-                        has_explore, explore_name = contains_explore_source(derived_block)
-                        if has_explore:
-                            view_source_definitions[view_name] = {
-                                'type': 'explore_source',
-                                'definition': f"explore_source: {explore_name}"
-                            }
-                        else:
-                            # 提取SQL查询
-                            sql_match = re.search(r'sql\s*:\s*([\s\S]*?);;', derived_block, re.DOTALL)
-                            if sql_match:
-                                sql_text = sql_match.group(1).strip()
-                                # 删除截断代码，保留完整SQL
-                                view_source_definitions[view_name] = {
-                                    'type': 'derived_table_sql',
-                                    'definition': sql_text
-                                }
-                            else:
-                                view_source_definitions[view_name] = {
-                                    'type': 'derived_table',
-                                    'definition': 'derived_table with no clear SQL definition'
-                                }
-                    else:
+                                if brace_level == 0:
+                                    derived_block = view_content[brace_start+1:i-1].strip()
+                                    derived_table_found = True
+                                    
+                                    # 3. Check if there is explore_source
+                                    if "explore_source:" in derived_block:
+                                        explore_match = re.search(r'explore_source:\s+(\w+)', derived_block)
+                                        if explore_match:
+                                            explore_name = explore_match.group(1)
+                                            view_source_definitions[view_name] = {
+                                                'type': 'explore_source',
+                                                'definition': f"explore_source: {explore_name}"
+                                            }
+                                            continue
+                                    
+                                    # 4. Extract SQL query - handle complex SQL blocks and Liquid templates
+                                    if "sql:" in derived_block:
+                                        # Find content after sql:
+                                        sql_pos = derived_block.find("sql:")
+                                        if sql_pos != -1:
+                                            sql_pos += 4  # Skip "sql:"
+                                            # Find the ending double semicolon
+                                            end_pos = derived_block.find(";;", sql_pos)
+                                            if end_pos != -1:
+                                                sql_text = derived_block[sql_pos:end_pos].strip()
+                                                view_source_definitions[view_name] = {
+                                                    'type': 'derived_table_sql',
+                                                    'definition': sql_text
+                                                }
+                                                continue
+                    
+                    # If derived_table was not found through the above method, try a looser match
+                    if not derived_table_found and "derived_table" in view_content:
+                        # Simply extract the block starting from derived_table
+                        dt_pos = view_content.find("derived_table")
+                        if dt_pos != -1:
+                            # Find the double semicolon mark afterwards
+                            dt_end = view_content.find(";;", dt_pos)
+                            if dt_end != -1:
+                                dt_block = view_content[dt_pos:dt_end+2].strip()
+                                # Try to extract the SQL part
+                                if "sql:" in dt_block:
+                                    sql_start = dt_block.find("sql:") + 4
+                                    sql_text = dt_block[sql_start:dt_block.find(";;", sql_start)].strip()
+                                    view_source_definitions[view_name] = {
+                                        'type': 'derived_table_sql',
+                                        'definition': sql_text
+                                    }
+                                    continue
+                    
+                    # If no definition was found, record as unknown
+                    if view_name not in view_source_definitions:
                         view_source_definitions[view_name] = {
                             'type': 'unknown',
                             'definition': 'No sql_table_name or derived_table found'
                         }
                     
         except Exception as e:
-            print(f"提取视图数据来源定义时出错 {file_path}: {e}")
+            print(f"Error extracting view data source definition {file_path}: {e}")
     
-    print(f"提取了 {len(view_source_definitions)} 个视图的数据来源定义")
+    print(f"Extracted data source definitions for {len(view_source_definitions)} views")
+    
+    # Check if fact_purchased_orders is in the results
+    if "fact_purchased_orders" in view_source_definitions:
+        print(f"Successfully extracted source definition type for fact_purchased_orders: {view_source_definitions['fact_purchased_orders']['type']}")
+        print(f"Definition length: {len(view_source_definitions['fact_purchased_orders']['definition'])}")
+    else:
+        print(f"Warning: Could not extract source definition for fact_purchased_orders")
+    
     return view_source_definitions
 
-# 提取表信息的函数，专注于从视图定义中提取表信息
-def extract_tables_from_views():
+# Function to extract table information, focusing on extracting table info from view definitions
+def extract_tables_from_views(normalized_view_source_definitions=None):
     actual_table_names = {}
-    view_citation_types = {}  # 记录每个视图的引用类型
+    view_citation_types = {}  # Record citation type for each view
     
-    # 查找所有视图文件
+    # Find all view files
     view_files = glob.glob('views/**/*.view.lkml', recursive=True)
-    # 也在其他目录中查找视图文件
+    # Also look for view files in other directories
     view_files += glob.glob('**/*.view.lkml', recursive=True)
-    # 去除重复项
+    # Remove duplicates
     view_files = list(set(view_files))
     
-    print(f"DEBUG - 在所有目录中找到了 {len(view_files)} 个视图文件")
+    print(f"DEBUG - Found {len(view_files)} view files in all directories")
     
-    # 创建一个集合来记录可能包含派生视图的目录中的视图文件
+    # Create a set to record view files in directories that might contain derived views
     derived_view_files = [f for f in view_files if 'derived_views/' in f or 'derived_tables/' in f or 'flip_views/derived_tables/' in f]
-    print(f"DEBUG - 找到了 {len(derived_view_files)} 个可能的派生视图文件")
+    print(f"DEBUG - Found {len(derived_view_files)} potential derived view files")
     
-    # 首先处理派生视图目录中的视图，它们可能基于explore_source
+    # First process views in derived view directories, they might be based on explore_source
     for file_path in derived_view_files:
         try:
             with open(file_path, 'r') as f:
                 content = f.read()
                 
-                # 尝试查找explore_source关键字
+                # Try to find the explore_source keyword
                 if 'explore_source:' in content or 'explore_source :' in content:
-                    # 提取视图名称
+                    # Extract view name
                     view_match = re.search(r'view:\s+(\w+)\s+{', content)
                     if view_match:
                         view_name = view_match.group(1)
-                        print(f"DEBUG - 在派生目录中找到了可能的explore_source视图: {view_name}")
+                        print(f"DEBUG - Found potential explore_source view in derived directory: {view_name}")
                         
-                        # 检查它是否实际包含explore_source
+                        # Check if it actually contains explore_source
                         has_explore, explore_name = contains_explore_source(content, view_name)
                         if has_explore:
                             view_citation_types[view_name] = 'derived_explore'
-                            print(f"DEBUG - 标记 {view_name} 为 derived_explore 类型")
+                            print(f"DEBUG - Marked {view_name} as derived_explore type")
         except Exception as e:
-            print(f"处理派生视图 {file_path} 时出错: {e}")
+            print(f"Error processing derived view {file_path}: {e}")
     
-    # 然后处理所有其他视图文件
+    # Process views using normalized source definitions (if provided)
+    if normalized_view_source_definitions:
+        for view_name, source_info in normalized_view_source_definitions.items():
+            if source_info['type'] == 'derived_table_sql':
+                # Extract table names using normalized definition
+                sql_text = source_info.get('normalized_definition', source_info['definition'])
+                tables = extract_tables_from_sql(sql_text)
+                if tables:
+                    actual_table_names[view_name] = tables
+                    view_citation_types[view_name] = 'native'
+            elif source_info['type'] == 'sql_table_name':
+                # Use normalized sql_table_name
+                table_name = source_info.get('normalized_definition', source_info['definition'])
+                if table_name:
+                    actual_table_names[view_name] = [table_name]
+                    view_citation_types[view_name] = 'native'
+    
+    # Then process all other view files
     for file_path in view_files:
         try:
-            # 跳过已处理的派生视图
-            if file_path in derived_view_files and any(view_name in view_citation_types for view_name in view_citation_types if view_citation_types[view_name] == 'derived_explore'):
+            # Skip already processed derived views or views already processed using normalized source definitions
+            if ((file_path in derived_view_files and 
+                any(view_name in view_citation_types for view_name in view_citation_types if view_citation_types[view_name] == 'derived_explore')) or
+                (normalized_view_source_definitions and 
+                any(view_name in normalized_view_source_definitions and view_name in actual_table_names for view_name in actual_table_names))):
                 continue
-                
+            
             with open(file_path, 'r') as f:
                 content = f.read()
                 
-                # 提取所有视图名称，而不仅仅是第一个
+                # Extract all view names, not just the first one
                 view_matches = re.finditer(r'view:\s+(\w+)\s+{', content)
                 for view_match in view_matches:
                     view_name = view_match.group(1)
                     
-                    # 跳过已处理的视图
-                    if view_name in view_citation_types and view_citation_types[view_name] == 'derived_explore':
+                    # Skip views that have already been processed
+                    if (view_name in view_citation_types and view_citation_types[view_name] == 'derived_explore') or (
+                        normalized_view_source_definitions and view_name in normalized_view_source_definitions and view_name in actual_table_names):
                         continue
                     
                     view_start_pos = view_match.start()
                     
-                    # 查找此视图定义的结束位置
-                    # 计算花括号的嵌套级别
+                    # Find the end position of this view definition
+                    # Calculate the nesting level of curly braces
                     bracket_level = 0
                     view_end_pos = None
                     in_view = False
@@ -618,242 +769,94 @@ def extract_tables_from_views():
                                 break
                     
                     if view_end_pos is None:
-                        continue  # 无法确定视图的结束位置
+                        continue  # Cannot determine the end position of the view
                     
-                    # 提取当前视图的内容
+                    # Extract the content of the current view
                     view_content = content[view_start_pos:view_end_pos]
                     
-                    # 调用函数处理单个视图
+                    # Call the function to process a single view
                     tables, citation_type = extract_tables_from_view_content(view_name, view_content)
                     
-                    # 记录引用类型
+                    # Record citation type
                     if citation_type:
                         view_citation_types[view_name] = citation_type
                     
-                    # 只有在找到表名时才添加到字典中
+                    # Only add to the dictionary if table names are found
                     if tables:
                         actual_table_names[view_name] = tables
                     
         except Exception as e:
-            print(f"处理 {file_path} 时出错: {e}")
+            print(f"Error processing {file_path}: {e}")
     
-    print(f"从视图定义中提取了 {len(actual_table_names)} 个视图的表名")
-    print(f"提取的表引用总数: {sum(len(tables) for tables in actual_table_names.values())}")
+    print(f"Extracted table names for {len(actual_table_names)} views from view definitions")
+    print(f"Total number of table references extracted: {sum(len(tables) for tables in actual_table_names.values())}")
     
     return actual_table_names, view_citation_types
 
-# 从单个视图内容中提取表名
-def extract_tables_from_view_content(view_name, content):
-    # 此函数处理单个视图的内容并提取表名
+# Extract table names from a single view's content
+def extract_tables_from_view_content(view_name, view_content):
     tables = []
+    citation_type = None
     
-    # 首先检查它是否包含explore_source关键字
-    has_explore, explore_name = contains_explore_source(content, "")
-    if has_explore:
-        return [], 'derived_explore'
-    
-    # 预处理内容：按行分割
-    content_lines = content.split('\n')
-    # 过滤掉注释行（以#开头的行）
-    uncommented_content = '\n'.join([line for line in content_lines if not line.strip().startswith('#')])
-    
-    # 在预处理的内容中检查explore_source
-    has_explore, explore_name = contains_explore_source(uncommented_content)
-    if has_explore:
-        print(f"DEBUG - 在预处理内容中检测到explore_source视图: {view_name}, explore: {explore_name}")
-        return [], 'derived_explore'
-    
-    # ------- 改进的derived_table块提取 -------
-    derived_block = None
-    dt_pos = content.find('derived_table')
-    if dt_pos != -1:
-        # 在关键字后找到第一个左花括号
-        brace_start = content.find('{', dt_pos)
-        if brace_start != -1:
-            brace_level = 1
-            i = brace_start + 1
-            while i < len(content) and brace_level > 0:
-                if content[i] == '{':
-                    brace_level += 1
-                elif content[i] == '}':
-                    brace_level -= 1
-                i += 1
-            if brace_level == 0:
-                derived_block = content[brace_start + 1 : i - 1]
-    
-    if derived_block:
-        
-        # 在derived_block中检查explore_source
-        has_explore, explore_name = contains_explore_source(derived_block)
-        if has_explore:
-            print(f"DEBUG - 在derived_table中检测到explore_source: {view_name}, explore: {explore_name}")
-            return [], 'derived_explore'
-    else:
-        derived_block = None  # 确保变量存在
-    
-    # 从uncommented_content中删除双引号，以便更好地匹配表名
-    # 这有助于处理Looker中不同的引号样式（双引号、反引号或无引号）
-    uncommented_content_no_quotes = uncommented_content.replace('"', '')
-    
-    # 尝试查找sql_table_name定义（不包括注释行）
-    # 原始正则表达式只匹配用反引号括起来的表名
-    # sql_table_match = re.search(r'sql_table_name:\s+`([^`]+)`', uncommented_content)
-    
-    # 新的正则表达式可以处理分别用反引号括起来的项目名、数据集和表名
-    # 也处理没有引号的标准格式和去除双引号的格式
-    sql_table_match = re.search(
-        r'sql_table_name:\s+(?:'
-        r'`?([^`\s.]+)`?\.`?([^`\s.]+)`?\.`?([^`\s.;]+)`?|'  # 可能带反引号的格式: `project`.`dataset`.`table`
-        r'`([^`]+)`|'  # 整个引用都在反引号中的格式: `project.dataset.table`
-        r'([^`\s.]+)\.([^`\s.]+)\.([^`\s.;]+)|'  # 不带引号的格式: project.dataset.table
-        r'([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)'  # 去除双引号后的简单格式
-        r')',
-        uncommented_content_no_quotes
-    )
+    # Try to find sql_table_name definition (excluding comment lines)
+    sql_table_pattern = re.compile(r'sql_table_name:\s*(?!//)(.*?)\s*;;', re.DOTALL)
+    sql_table_match = sql_table_pattern.search(view_content)
     
     if sql_table_match:
-        if sql_table_match.group(4):  # 原始格式: `project.dataset.table`
-            table_name = sql_table_match.group(4)
-        elif sql_table_match.group(7):  # 不带引号或反引号的格式: project.dataset.table
-            project = sql_table_match.group(5)
-            dataset = sql_table_match.group(6)
-            table = sql_table_match.group(7)
-            table_name = f"{project}.{dataset}.{table}"
-        elif sql_table_match.group(10):  # 去除双引号后的简单格式
-            project = sql_table_match.group(8)
-            dataset = sql_table_match.group(9)
-            table = sql_table_match.group(10)
-            table_name = f"{project}.{dataset}.{table}"
-        else:  # 新格式: `project`.`dataset`.`table` 或变体
-            project = sql_table_match.group(1)
-            dataset = sql_table_match.group(2)
-            table = sql_table_match.group(3)
-            table_name = f"{project}.{dataset}.{table}"
+        sql_table_name = sql_table_match.group(1).strip()
         
-        tables.append(table_name)
-        return tables, 'native'
-    
-    # 检查derived_table的内容（如果提取了）
-    if derived_block:
-        # 从derived_block中删除双引号，以便更好地解析SQL
-        derived_block_no_quotes = derived_block.replace('"', '')
+        # Complex pattern to handle various SQL table reference formats
+        table_pattern = re.compile(
+            r'`?([^`\s.]+)`?\.`?([^`\s.]+)`?\.`?([^`\s.;]+)`?|'  # Format with optional backticks: `project`.`dataset`.`table`
+            r'`([^`]+)`|'  # Format with entire reference in backticks: `project.dataset.table`
+            r'([^`\s.]+)\.([^`\s.]+)\.([^`\s.;]+)|'  # Format without quotes: project.dataset.table
+            r'([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)'  # Simple format after removing double quotes
+        )
         
-        # 提取不同格式的SQL定义
-        sql_match = None
-        # 1) 显式块，以;; 结束（LookML标准）
-        sql_match = re.search(r'sql\s*:\s*([\s\S]*?);;', derived_block_no_quotes, re.DOTALL)
-        if not sql_match:
-            # 2) 三重引号/大括号后备
-            for pattern in [r'sql:\s*{{{([^}]+)}}}', r'sql:\s*"""([\s\S]+?)"""', r'sql:\s*{([\s\S]+?)}', r'sql:\s*"([^"]+)"']:
-                sql_match = re.search(pattern, derived_block_no_quotes, re.DOTALL)
-                if sql_match:
-                    break
-        
-        if sql_match:
-            sql_text = sql_match.group(1)
-            # 从SQL文本中删除双引号，以便更好地提取表
-            sql_text_no_quotes = sql_text.replace('"', '')
+        # Try to find table name
+        sql_table_match = table_pattern.search(sql_table_name)
+        if sql_table_match:
+            citation_type = 'native'
             
-            # 首先检查是否有Liquid条件块
-            liquid_tables = extract_tables_from_liquid_block(sql_text_no_quotes, False)
-            if liquid_tables:
-                tables.extend(liquid_tables)
-            
-            # 然后使用更通用的SQL解析来提取表名
-            extracted_tables = extract_tables_from_sql(sql_text_no_quotes)
-            for table in extracted_tables:
-                if table not in tables:
-                    tables.append(table)
-        
-        # 如果没有找到SQL定义，直接在整个derived_block中搜索表引用
+            if sql_table_match.group(4):  # Original format: `project.dataset.table`
+                tables.append(sql_table_match.group(4))
+            elif sql_table_match.group(7):  # Format without quotes or backticks: project.dataset.table
+                table_name = f"{sql_table_match.group(5)}.{sql_table_match.group(6)}.{sql_table_match.group(7)}"
+                tables.append(table_name)
+            elif sql_table_match.group(10):  # Simple format after removing double quotes
+                table_name = f"{sql_table_match.group(8)}.{sql_table_match.group(9)}.{sql_table_match.group(10)}"
+                tables.append(table_name)
+            else:  # New format: `project`.`dataset`.`table` or variations
+                table_name = f"{sql_table_match.group(1)}.{sql_table_match.group(2)}.{sql_table_match.group(3)}"
+                tables.append(table_name)
         else:
-            # 检查直接引用的表（使用反引号）
-            table_refs = re.finditer(r'`([^`]+\.[^`]+\.[^`]+)`', derived_block_no_quotes)
-            for match in table_refs:
-                table_name = match.group(1)
-                if table_name not in tables:
-                    tables.append(table_name)
-            
-            # 检查不带反引号的常规引用（例如，"schema.dataset.table"）
-            table_refs_no_backticks = re.finditer(r'([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)', derived_block_no_quotes)
-            for match in table_refs_no_backticks:
-                table_name = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
-                if table_name not in tables:
-                    tables.append(table_name)
-            
-            # 检查Liquid条件块中的表引用
-            liquid_tables = extract_tables_from_liquid_block(derived_block_no_quotes, False)
-            for table in liquid_tables:
-                if table not in tables:
-                    tables.append(table)
-    
-    # 改进：如果找到多个表引用，尝试选择最相关的一个作为主表
-    if len(tables) > 0:
-        if len(tables) > 1:
-            for i, table in enumerate(tables):
-                parts = table.split('.')
-                if len(parts) == 3:
-                    # 检查表名部分是否等于项目名部分
-                    if parts[0] == parts[2]:
-                        # 这可能是一个不正确的提取尝试，尝试找到更好的替代
-                        for other_table in tables:
-                            if other_table != table and other_table.endswith(view_name) or view_name in other_table:
-                                # 找到一个更相关的表，将其设置为主表
-                                tables.remove(other_table)
-                                tables.insert(0, other_table)
-                                break
-                        
-                        # 删除不正确的表引用
-                        tables.remove(table)
-                        break
+            # If no table pattern match, just record the raw sql_table_name
+            tables.append(sql_table_name)
+    else:
+        # Check for derived_table content (if extracted)
+        derived_table_pattern = re.compile(r'derived_table\s*{(.*?)}\s*;;', re.DOTALL)
+        derived_table_match = derived_table_pattern.search(view_content)
         
-        # 尝试找到与视图名称相似的表名
-        view_base_name = view_name.replace('fact_', '').replace('dim_', '')
-        matched_tables = []
-        
-        for table in tables:
-            table_parts = table.split('.')
-            if len(table_parts) == 3:
-                table_base = table_parts[2]  # 从完整路径中提取表名
-            elif len(table_parts) == 2:
-                table_base = table_parts[1]
-            else:
-                table_base = table_parts[0]
+        if derived_table_match:
+            derived_table_content = derived_table_match.group(1).strip()
+            
+            # Check if it has explore_source
+            explore_pattern = re.compile(r'explore_source:\s*(\w+)', re.DOTALL)
+            explore_match = explore_pattern.search(derived_table_content)
+            
+            if explore_match:
+                # Derived from explore_source
+                citation_type = 'derived_explore'
+                explore_name = explore_match.group(1)
+                tables.append(f"explore:{explore_name}")
+            elif 'sql:' in derived_table_content:
+                # Derived from SQL
+                citation_type = 'derived_sql'
+                sql_pattern = re.compile(r'sql:\s*(.*?)(?:;;|$)', re.DOTALL)
+                sql_match = sql_pattern.search(derived_table_content)
                 
-            # 检查表名是否与视图名称相似
-            table_base = table_base.replace('fact_', '').replace('dim_', '')
-            
-            if view_base_name in table_base or table_base in view_base_name:
-                matched_tables.append(table)
-        
-        # 如果找到匹配的表，使用第一个匹配的表作为主表
-        if matched_tables:
-            primary_table = matched_tables[0]
-            # 将此表移到表列表的前面
-            if primary_table in tables:
-                tables.remove(primary_table)
-            tables.insert(0, primary_table)
-            
-        # 优先考虑实际表名最短的表
-        if len(tables) > 1:
-            # 提取实际表名（完整表路径的最后一部分）
-            table_with_lengths = []
-            for table in tables:
-                parts = table.split('.')
-                actual_table = parts[-1] if len(parts) > 0 else table
-                table_with_lengths.append((len(actual_table), table))
-            
-            # 按实际表名长度排序
-            table_with_lengths.sort()
-            
-            if table_with_lengths:
-                shortest_table = table_with_lengths[0][1]
-                # 将最短名称的表移到前面
-                tables.remove(shortest_table)
-                tables.insert(0, shortest_table)
+                if sql_match:
+                    sql_content = sql_match.group(1).strip()
+                    tables = extract_tables_from_sql(sql_content)
     
-    # 新增：如果使用了derived_table但实际上引用了一个真实表，将citation_type设置为'native'
-    if derived_block and tables:
-        return tables, 'native'
-    
-    return tables, 'native' if tables else '' 
+    return tables, citation_type 
